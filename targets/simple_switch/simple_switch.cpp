@@ -57,7 +57,7 @@ struct bmv2_hash {
   }
 };
 
-struct hash1 {
+struct h1 {
   uint32_t operator()(const char *buf, size_t s) const {
     uint32_t hash = 0;
     if (s == 4) {
@@ -68,7 +68,7 @@ struct hash1 {
   }
 };
 
-struct hash2 {
+struct h2 {
   uint32_t operator()(const char *buf, size_t s) const {
     uint32_t hash = 0;
     if (s == 4) {
@@ -79,7 +79,7 @@ struct hash2 {
   }
 };
 
-struct hash3 {
+struct h3 {
   uint32_t operator()(const char *buf, size_t s) const {
     uint32_t hash = 0;
     if (s == 4) {
@@ -90,7 +90,7 @@ struct hash3 {
   }
 };
 
-struct hash4 {
+struct h4 {
   uint32_t operator()(const char *buf, size_t s) const {
     uint32_t hash = 0;
     if (s == 4) {
@@ -101,7 +101,7 @@ struct hash4 {
   }
 };
 
-struct ghash1 {
+struct g1 {
   uint32_t operator()(const char *buf, size_t s) const {
     uint32_t hash = 0;
     if (s == 4) {
@@ -112,7 +112,7 @@ struct ghash1 {
   }
 };
 
-struct ghash2 {
+struct g2 {
   uint32_t operator()(const char *buf, size_t s) const {
     uint32_t hash = 0;
     if (s == 4) {
@@ -123,7 +123,7 @@ struct ghash2 {
   }
 };
 
-struct ghash3 {
+struct g3 {
   uint32_t operator()(const char *buf, size_t s) const {
     uint32_t hash = 0;
     if (s == 4) {
@@ -134,7 +134,7 @@ struct ghash3 {
   }
 };
 
-struct ghash4 {
+struct g4 {
   uint32_t operator()(const char *buf, size_t s) const {
     uint32_t hash = 0;
     if (s == 4) {
@@ -151,14 +151,14 @@ struct ghash4 {
 // give an unused variable warning
 REGISTER_HASH(hash_ex);
 REGISTER_HASH(bmv2_hash);
-REGISTER_HASH(hash1);
-REGISTER_HASH(hash2);
-REGISTER_HASH(hash3);
-REGISTER_HASH(hash4);
-REGISTER_HASH(ghash1);
-REGISTER_HASH(ghash2);
-REGISTER_HASH(ghash3);
-REGISTER_HASH(ghash4);
+REGISTER_HASH(h1);
+REGISTER_HASH(h2);
+REGISTER_HASH(h3);
+REGISTER_HASH(h4);
+REGISTER_HASH(g1);
+REGISTER_HASH(g2);
+REGISTER_HASH(g3);
+REGISTER_HASH(g4);
 
 extern int import_primitives();
 
