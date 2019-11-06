@@ -56,7 +56,7 @@ Our Travis regression tests now run on Ubuntu 14.04.
 
 This command line will install all the dependencies needed on Ubuntu 16.04:
 
-    sudo apt install automake cmake libjudy-dev libgmp-dev libpcap-dev libboost-dev libboost-test-dev libboost-program-options-dev libboost-system-dev libboost-filesystem-dev libboost-thread-dev libevent-dev libtool flex bison pkg-config g++ libssl-dev python-pip
+    sudo apt install automake cmake libjudy-dev libgmp-dev libpcap-dev libboost-dev libboost-test-dev libboost-program-options-dev libboost-system-dev libboost-filesystem-dev libboost-thread-dev libevent-dev libtool flex bison pkg-config g++ libssl-dev python-dev python-pip wget
 
 On MacOS you can use the tools/macos/bootstrap_mac.sh script to
 install all the above dependencies using homebrew. Note that in order
