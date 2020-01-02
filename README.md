@@ -42,6 +42,7 @@ You also need to install the following from source. Feel free to use the
 install scripts under travis/.
 
 - [thrift 0.9.2](https://github.com/apache/thrift/releases/tag/0.9.2) or later
+  (up to 0.12.1)
 - [nanomsg 1.0.0](https://github.com/nanomsg/nanomsg/releases/tag/1.0.0) or
   later
 
@@ -171,6 +172,18 @@ switch is running:
 
 The script will display events of significance (table hits / misses, parser
 transitions, ...) for each packet.
+
+## Loading shared objects dynamically
+
+Some targets (simple_switch and simple_switch_grpc) let the user load shared
+libraries dynamically at runtime. This is done by using the target-specific
+command-line option `--load-modules`, which takes as a parameter a
+comma-separated list of shared objects. This functionality is currently only
+available on systems where `dlopen` is available. Make sure that the shared
+objects are visible by the dynamic loader (e.g. by setting `LD_LIBRARY_PATH`
+appropriately on Linux). You can control whether this feature is available by
+using `--enable-modules` / `--disable-modules` when configuring bmv2. By
+default, this feature is enabled when `dlopen` is available.
 
 ## Integrating with Mininet
 

@@ -18,7 +18,9 @@
  *
  */
 
-#ifdef P4THRIFT
+#include <bm/config.h>
+
+#ifdef BM_P4THRIFT
 #include <p4thrift/protocol/TBinaryProtocol.h>
 #include <p4thrift/transport/TSocket.h>
 #include <p4thrift/transport/TTransportUtils.h>
@@ -42,6 +44,7 @@ namespace thrift_provider = apache::thrift;
 #include <nanomsg/pubsub.h>
 
 #include <iostream>
+#include <memory>
 #include <string>
 
 #include <cassert>
@@ -113,7 +116,7 @@ LearnListener::start() {
   shared_ptr<TMultiplexedProtocol> standard_protocol(
       new TMultiplexedProtocol(protocol, "standard"));
 
-  bm_client = boost::shared_ptr<runtime::StandardClient>(
+  bm_client = std::shared_ptr<runtime::StandardClient>(
       new runtime::StandardClient(standard_protocol));
 
   transport->open();

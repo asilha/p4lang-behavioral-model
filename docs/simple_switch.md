@@ -94,11 +94,13 @@ Here are the fields:
   control in v1model, which is executed after the parser and before
   ingress.
 - `clone_spec` (v1m): should not be accessed directly. It is set by
-  the `clone` and `clone3` action primitives and is required for the
-  packet clone (aka mirror) feature. The "ingress to egress" clone
-  primitive action must be called from the ingress pipeline, and the
-  "egress to egress" clone primitive action must be called from the
-  egress pipeline.
+  the `clone` and `clone3` primitive actions in P4_16 programs, or the
+  `clone_ingress_pkt_to_egress` and `clone_egress_pkt_to_egress`
+  primitive actions for P4_14 programs, and is required for the packet
+  clone (aka mirror) feature. The "ingress to egress" clone primitive
+  action must be called from the ingress pipeline, and the "egress to
+  egress" clone primitive action must be called from the egress
+  pipeline.
 
 ## Intrinsic metadata
 
@@ -235,7 +237,7 @@ file](../targets/simple_switch/primitives.cpp).
 After-ingress pseudocode - the short version:
 
 ```
-if (clone_spec != 0) {      // because your code called clone or clone3
+if (clone_spec != 0) {      // because your code called a clone primitive action
     make a clone of the packet with details configured for the clone session
 }
 if (lf_field_list != 0) {   // because your code called generate_digest
@@ -258,11 +260,14 @@ version:
 
 ```
 if (clone_spec != 0) {
-    // This condition will be true if your code called the clone or
-    // clone3 primitive action during ingress processing.
+    // This condition will be true if your code called the `clone` or
+    // `clone3` primitive action from a P4_16 program, or the
+    // `clone_ingress_pkt_to_egress` primitive action in a P4_14
+    // program, during ingress processing.
+
     Make a clone of the packet destined for the egress_port configured
     in the clone (aka mirror) session id number that was given when the
-    last clone or clone3 primitive action was called.
+    last clone primitive action was called.
 
     The packet contents will be the same as when it most recently
     began the ingress processing, where the clone operation was
@@ -272,10 +277,14 @@ if (clone_spec != 0) {
     this occurrence of ingress processing via a recirculate operation,
     for example.)
 
-    If it was a clone3 action, also preserve the final ingress values
-    of the metadata fields specified in the field list argument,
-    except assign clone_spec a value of 0 always, and instance_type a
-    value of PKT_INSTANCE_TYPE_INGRESS_CLONE.
+    If it was a clone3 (P4_16) or clone_ingress_pkt_to_egress (P4_14)
+    action, also preserve the final ingress values of the metadata
+    fields specified in the field list argument, except assign
+    clone_spec a value of 0 always, and instance_type a value of
+    PKT_INSTANCE_TYPE_INGRESS_CLONE.
+
+    The cloned packet will continue processing at the beginning of
+    your egress code.
     // fall through to code below
 }
 if (lf_field_list != 0) {
@@ -319,7 +328,7 @@ if (resubmit_flag != 0) {
 After-egress pseudocode - the short version:
 
 ```
-if (clone_spec != 0) {    // because your code called clone or clone3
+if (clone_spec != 0) {    // because your code called a clone primitive action
     make a clone of the packet with details configured for the clone session
 }
 if (egress_spec == 511) {  // because your code called drop/mark_to_drop
@@ -337,8 +346,11 @@ version:
 
 ```
 if (clone_spec != 0) {
-    // This condition will be true if your code called the clone or
-    // clone3 primitive action during egress processing.
+    // This condition will be true if your code called the `clone` or
+    // `clone3` primitive action from a P4_16 program, or the
+    // `clone_egress_pkt_to_egress` primitive action in a P4_14
+    // program, during egress processing.
+
     Make a clone of the packet destined for the egress_port configured
     in the clone (aka mirror) session id number that was given when the
     last clone or clone3 primitive action was called.
@@ -347,10 +359,14 @@ if (clone_spec != 0) {
     egress processing, with any modifications made to the packet
     during both ingress and egress processing.
 
-    If it was a clone3 action, also preserve the final egress values
-    of the metadata fields specified in the field list argument,
-    except assign clone_spec a value of 0 always, and instance_type a
-    value of PKT_INSTANCE_TYPE_EGRESS_CLONE.
+    If it was a clone3 (P4_16) or clone_egress_pkt_to_egress (P4_14)
+    action, also preserve the final egress values of the metadata
+    fields specified in the field list argument, except assign
+    clone_spec a value of 0 always, and instance_type a value of
+    PKT_INSTANCE_TYPE_EGRESS_CLONE.
+
+    The cloned packet will continue processing at the beginning of
+    your egress code.
     // fall through to code below
 }
 if (egress_spec == 511) {
@@ -377,3 +393,93 @@ if (egress_spec == 511) {
     the control plane configured for that clone session).
 }
 ```
+
+
+## Table match kinds supported
+
+`simple_switch` supports table key fields with any of the following `match_kind`
+values:
+
++ `exact` - from P4_16 language specification
++ `lpm` - from P4_16 language specification
++ `ternary` - from P4_16 language specification
++ `range` - defined in `v1model.p4`
++ `selector` - defined in `v1model.p4`
+
+`selector` is only supported for tables with an action profile or action
+selector implementation.
+
+If a table has more than one `lpm` key field, it is rejected by the `p4c` BMv2
+back end. This could be generalized slightly, as described below, but that
+restriction is in place as of the January 2019 version of `p4c`.
+
+If a table has at least one `range` field, it is implemented internally as a
+`range` table in BMv2. Because a single search key could match mutiple entries,
+every entry must be assigned a numeric priority by the control plane software
+when it is installed. If multiple installed table entries match the same search
+key, one among them with the maximum numeric priority will "win", and its action
+performed. Note that winner is one with maximum numeric priority value if you
+use the P4Runtime API to specify the numeric priorities. Check the documentation
+of your control plane API if you use a different one, as some might choose to
+use the convention that minimum numeric priority values win over larger ones.
+
+A `range` table may have an `lpm` field. If so, the prefix length is used to
+determine whether a search key matches the entry, but the prefix length does
+_not_ determine the relative priority among multiple matching table
+entries. Only the numeric priority supplied by the control plane software
+determines that. Because of this, it would be reasonable for a `range` table to
+support multiple `lpm` key fields, but as of January 2019 this is not supported.
+
+If a table has no `range` field, but at least one `ternary` field, it is
+implemented internally as a `ternary` table in BMv2. As for `range` tables, a
+single search key can be matched by multiple table entries, and thus every entry
+must have a numeric priority assigned by the control plane software. The same
+note about `lpm` fields described above for `range` tables also applied to
+`ternary` tables.
+
+If a table has neither `range` nor `ternary` fields, but at least one `lpm`
+field, there must be exactly one `lpm` field. There can be 0 or more `exact`
+fields. While there can be multiple installed table entries that match a single
+search key, with these restrictions there can be at most one matching table
+entry of each possible prefix length of the `lpm` field (because no two table
+entries installed at the same time are allowed to have the same search key). The
+matching entry with the longest prefix length is always the winner. The control
+plane cannot specify a priority when installing entries for such a table -- it
+is always determined by the prefix length.
+
+If a table has only `exact` fields, it is implemented internally as an `exact`
+table in BMv2. For any search key, there can be at most one matching table
+entry, because duplicate search keys are not allowed to be installed. Thus no
+numeric priority is ever needed to determine the "winning" matching table entry.
+BMv2 (and many other P4 implementations) implements the match portion of such a
+table's functionality using a hash table.
+
+
+## P4_16 plus v1model architecture notes
+
+This section is an incomplete description of the v1model architecture
+for P4_16.  Much of the earlier parts of this document are also a
+description of the P4_16 v1model architecture, but in some cases they
+also serve to document the P4_14 behavior of `simple_switch`.  This
+section is only for things specific to P4_16 plus the v1model
+architecture.
+
+There is a type called `H` that is a parameter to the package
+`V1Switch` definition in `v1model.p4`, excerpted below:
+
+```P4
+package V1Switch<H, M>(Parser<H, M> p,
+                       VerifyChecksum<H, M> vr,
+                       Ingress<H, M> ig,
+                       Egress<H, M> eg,
+                       ComputeChecksum<H, M> ck,
+                       Deparser<H> dep
+                       );
+```
+
+This type `H` is restricted to be a struct that contains member fields
+of one of the following types, and no others:
+
++ header
++ header_union
++ header stack

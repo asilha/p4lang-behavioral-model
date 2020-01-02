@@ -18,9 +18,10 @@
  *
  */
 
+#include <bm/config.h>
 #include <bm/PsaSwitch.h>
 
-#ifdef P4THRIFT
+#ifdef BM_P4THRIFT
 #include <p4thrift/protocol/TBinaryProtocol.h>
 #include <p4thrift/server/TThreadedServer.h>
 #include <p4thrift/transport/TServerSocket.h>
@@ -38,6 +39,7 @@ namespace thrift_provider = apache::thrift;
 
 #include <bm/bm_sim/switch.h>
 #include <bm/bm_sim/logger.h>
+#include <bm/thrift/stdcxx.h>
 
 #include "psa_switch.h"
 
@@ -109,8 +111,8 @@ class PsaSwitchHandler : virtual public PsaSwitchIf {
   PsaSwitch *switch_;
 };
 
-boost::shared_ptr<PsaSwitchIf> get_handler(PsaSwitch *sw) {
-  return boost::shared_ptr<PsaSwitchHandler>(new PsaSwitchHandler(sw));
+stdcxx::shared_ptr<PsaSwitchIf> get_handler(PsaSwitch *sw) {
+  return stdcxx::shared_ptr<PsaSwitchHandler>(new PsaSwitchHandler(sw));
 }
 
 }  // namespace pswitch_runtime

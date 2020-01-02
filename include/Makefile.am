@@ -1,6 +1,11 @@
 ACLOCAL_AMFLAGS = ${ACLOCAL_FLAGS} -I m4
 
-nobase_include_HEADERS =
+nobase_include_HEADERS = \
+bm/config.h
+
+distclean-local: distclean-ax-prefix-config-h
+distclean-ax-prefix-config-h:
+	rm -f bm/config.h
 
 if COND_NANOMSG
 nobase_include_HEADERS += \
@@ -65,6 +70,7 @@ bm/bm_sim/packet_handler.h \
 bm/bm_sim/parser.h \
 bm/bm_sim/parser_error.h \
 bm/bm_sim/pcap_file.h \
+bm/bm_sim/periodic_task.h \
 bm/bm_sim/phv.h \
 bm/bm_sim/phv_forward.h \
 bm/bm_sim/phv_source.h \

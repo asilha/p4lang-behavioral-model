@@ -18,9 +18,10 @@
  *
  */
 
+#include <bm/config.h>
 #include <bm/SimpleSwitch.h>
 
-#ifdef P4THRIFT
+#ifdef BM_P4THRIFT
 #include <p4thrift/protocol/TBinaryProtocol.h>
 #include <p4thrift/server/TThreadedServer.h>
 #include <p4thrift/transport/TServerSocket.h>
@@ -38,6 +39,7 @@ namespace thrift_provider = apache::thrift;
 
 #include <bm/bm_sim/switch.h>
 #include <bm/bm_sim/logger.h>
+#include <bm/thrift/stdcxx.h>
 
 #include "simple_switch.h"
 
@@ -152,8 +154,8 @@ class SimpleSwitchHandler : virtual public SimpleSwitchIf {
   SimpleSwitch *switch_;
 };
 
-boost::shared_ptr<SimpleSwitchIf> get_handler(SimpleSwitch *sw) {
-  return boost::shared_ptr<SimpleSwitchHandler>(new SimpleSwitchHandler(sw));
+stdcxx::shared_ptr<SimpleSwitchIf> get_handler(SimpleSwitch *sw) {
+  return stdcxx::shared_ptr<SimpleSwitchHandler>(new SimpleSwitchHandler(sw));
 }
 
 }  // namespace sswitch_runtime
