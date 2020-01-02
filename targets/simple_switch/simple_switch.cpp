@@ -66,7 +66,7 @@ struct h1 {
     uint32_t hash = 0;
     if (s == 4) {
       uint32_t data = ntohl(*reinterpret_cast<const uint32_t*>(buf));
-      hash = ((static_cast<uint64_t>(155878125)*data + 144393013) % 179424691) % 976;
+      hash = ((static_cast<uint64_t>(155878125)*data + 144393013) % 179424691) % CS_WIDTH;
     }
     return hash;
   }
@@ -77,7 +77,7 @@ struct h2 {
     uint32_t hash = 0;
     if (s == 4) {
       uint32_t data = ntohl(*reinterpret_cast<const uint32_t*>(buf));
-      hash = ((static_cast<uint64_t>(113292259)*data + 68483982) % 179424691) % 976;
+      hash = ((static_cast<uint64_t>(113292259)*data + 68483982) % 179424691) % CS_WIDTH;
     }
     return hash;
   }
@@ -88,7 +88,7 @@ struct h3 {
     uint32_t hash = 0;
     if (s == 4) {
       uint32_t data = ntohl(*reinterpret_cast<const uint32_t*>(buf));
-      hash = ((static_cast<uint64_t>(35316782)*data + 126831809) % 179424691) % 976;
+      hash = ((static_cast<uint64_t>(35316782)*data + 126831809) % 179424691) % CS_WIDTH;
     }
     return hash;
   }
@@ -99,7 +99,7 @@ struct h4 {
     uint32_t hash = 0;
     if (s == 4) {
       uint32_t data = ntohl(*reinterpret_cast<const uint32_t*>(buf));
-      hash = ((static_cast<uint64_t>(159559853)*data + 107589136) % 179424691) % 976;
+      hash = ((static_cast<uint64_t>(159559853)*data + 107589136) % 179424691) % CS_WIDTH;
     }
     return hash;
   }
@@ -296,7 +296,7 @@ SimpleSwitch::SimpleSwitch(bool enable_swap, port_t drop_port)
   : Switch(enable_swap),
     drop_port(drop_port),
     input_buffer(new InputBuffer(
-        1024 /* normal capacity */, 1024 /* resubmit/recirc capacity */)),
+        262144 /* normal capacity */, 1024 /* resubmit/recirc capacity */)),
 #ifdef SSWITCH_PRIORITY_QUEUEING_ON
     egress_buffers(nb_egress_threads,
                    64, EgressThreadMapper(nb_egress_threads),
@@ -305,7 +305,7 @@ SimpleSwitch::SimpleSwitch(bool enable_swap, port_t drop_port)
     egress_buffers(nb_egress_threads,
                    64, EgressThreadMapper(nb_egress_threads)),
 #endif
-    output_buffer(128),
+    output_buffer(262144),
     // cannot use std::bind because of a clang bug
     // https://stackoverflow.com/questions/32030141/is-this-incorrect-use-of-stdbind-or-a-compiler-bug
     my_transmit_fn([this](port_t port_num, packet_id_t pkt_id,
