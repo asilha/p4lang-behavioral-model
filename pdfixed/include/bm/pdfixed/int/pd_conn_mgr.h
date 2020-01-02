@@ -28,13 +28,6 @@
 
 #include <bm/thrift/stdcxx.h>
 
-#ifdef BM_HAVE_THRIFT_STDCXX_H
-#include <thrift/stdcxx.h>
-namespace stdcxx = thrift_provider::stdcxx;
-#else
-namespace stdcxx = boost;
-#endif
-
 #include <mutex>
 #include <iostream>
 #include <array>
