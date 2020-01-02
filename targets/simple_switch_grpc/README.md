@@ -1,4 +1,4 @@
-# SimpleSwitchGrpc - a version of SimpleSwitch with P4 Runtime support
+# SimpleSwitchGrpc - a version of SimpleSwitch with P4Runtime support
 
 This is an alternative version of the simple_switch target, which does not use
 the Thrift runtime server for table programming (unless required, see below).
@@ -36,10 +36,49 @@ Github or the p4-dev mailing list.
     [sudo] make install  # if desired
     ```
 
+## Running simple_switch_grpc
+
+For information on how to run simple_switch_grpc, use `simple_switch_grpc
+--help`. In particular, take a look at the target-specific command-line options
+at the end of the help message. These command-line options are specific to
+simple_switch_grpc (to be precise, some of them are shared with the
+simple_switch binary). When invoking simple_switch_grpc, these options will need
+to be separated from standard bmv2 options using `--`.
+
+Most users will invoke simple_switch_grpc as follows:
+```
+simple_switch_grpc --skip-p4 \
+    -i <PORT1>@<IFACE1> -i <PORT2>@<IFACE2> <more ports> \
+    -- --grpc-server-addr <IP>:<TCP PORT> --cpu-port <CPU_PORT>
+```
+
+* `--skip-p4` is a standard bmv2 command-line option. It means that no JSON file
+  is provided when starting simple_switch_grpc and bmv2 will not initially be
+  able to process packets (i.e. all packets will be dropped). You will need to
+  provide a P4 "pipeline" (including a JSON file and a P4Info message) with the
+  P4Runtime `SetForwardingPipelineConfig` RPC. **This is the recommended way to
+  use simple_switch_grpc.**
+* `--grpc-server-addr` is used to provide a socket address on which the
+  P4Runtime server will be run (e.g. localhost:1234, 192.168.1.1:31416,
+  [::1]:27182, ...). It will default to 0.0.0.0:50051.
+* `--cpu-port` is used to provide a CPU port number and enable P4Runtime
+  packet-in / packet-out support. **We recommend that you use this option** as
+  otherwise you will not be able to receive / send packets using the P4Runtime
+  `StreamChannel` bi-directional stream. Packets sent to this port will be sent
+  to the P4Runtime controller, while packets received from the controller will
+  be injected in the pipeline on this port. When using standard v1model.p4, the
+  value must fit within 9 bits (as "port" metadata fields have type `bit<9>`). 0
+  is not a valid value. Do not use 511 as it is reserved for the "drop port" by
+  default. If you need to use 511 for the CPU port, you will need to provide a
+  new drop port value using the `--drop-port` command-line option.
+
+If you are not familiar with P4Runtime, please refer to the [latest
+released specification](https://p4.org/specs/).
+
 ## Tentative gNMI support with sysrepo
 
-We are working on supporting gNMI and OpenConfig YANG models as part of the P4
-Runtime server. We are using [sysrepo](https://github.com/sysrepo/sysrepo) as
+We are working on supporting gNMI and OpenConfig YANG models as part of the
+P4Runtime server. We are using [sysrepo](https://github.com/sysrepo/sysrepo) as
 our YANG configuration data store and operational state manager. See [this
 README](https://github.com/p4lang/PI/blob/master/proto/README.md) for more
 information on how to try it out. After installing sysrepo, building and
@@ -47,7 +86,7 @@ installing the PI project with sysrepo support enabled, you will need to
 configure simple_switch_grpc with `--with-sysrepo` and build it again.
 
 This directory includes a Python script, [gnmi_sub_once.py](gnmi_sub_once.py),
-which you can run to issue a gNMI ONCE subscription request to the P4 Runtime
+which you can run to issue a gNMI ONCE subscription request to the P4Runtime
 gRPC server running in the simple_switch_grpc process.
 
 ### OpenConfig support
@@ -129,12 +168,12 @@ The Thrift server can be enabled by passing the `--with-thrift` argument to
 `configure`.
 
 **Warning:** because the capabilities of the Thrift server overlap with those of
-the gRPC/P4 Runtime one (e.g. a table management API is exposed by both), there
+the gRPC/P4Runtime one (e.g. a table management API is exposed by both), there
 could be inconsistency issues when using both servers to write state to the
 switch. For example, if one tries to insert a table entry using Thrift, the same
-cannot be read using P4 Runtime. In general, to avoid such issues, we suggest to
+cannot be read using P4Runtime. In general, to avoid such issues, we suggest to
 use the Thrift server only to read state, or to write state that is not managed
-by P4 Runtime.
+by P4Runtime.
 
 ## FAQ
 

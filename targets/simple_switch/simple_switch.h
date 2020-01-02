@@ -78,12 +78,15 @@ class SimpleSwitch : public Switch {
     bool mgid_valid;
   };
 
+  static constexpr port_t default_drop_port = 511;
+
  private:
   using clock = std::chrono::high_resolution_clock;
 
  public:
   // by default, swapping is off
-  explicit SimpleSwitch(port_t max_port = 256, bool enable_swap = false);
+  explicit SimpleSwitch(bool enable_swap = false,
+                        port_t drop_port = default_drop_port);
 
   ~SimpleSwitch();
 
@@ -120,11 +123,22 @@ class SimpleSwitch : public Switch {
 
   void set_transmit_fn(TransmitFn fn);
 
+  port_t get_drop_port() const {
+    return drop_port;
+  }
+
+  SimpleSwitch(const SimpleSwitch &) = delete;
+  SimpleSwitch &operator =(const SimpleSwitch &) = delete;
+  SimpleSwitch(SimpleSwitch &&) = delete;
+  SimpleSwitch &&operator =(SimpleSwitch &&) = delete;
+
  private:
   static constexpr size_t nb_egress_threads = 4u;
   static packet_id_t packet_id;
 
   class MirroringSessions;
+
+  class InputBuffer;
 
   enum PktInstanceType {
     PKT_INSTANCE_TYPE_NORMAL,
@@ -167,9 +181,11 @@ class SimpleSwitch : public Switch {
   void multicast(Packet *packet, unsigned int mgid);
 
  private:
-  port_t max_port;
+  port_t drop_port;
   std::vector<std::thread> threads_;
-  Queue<std::unique_ptr<Packet> > input_buffer;
+  std::unique_ptr<InputBuffer> input_buffer;
+  // for these queues, the write operation is non-blocking and we drop the
+  // packet if the queue is full
 #ifdef SSWITCH_PRIORITY_QUEUEING_ON
   bm::QueueingLogicPriRL<std::unique_ptr<Packet>, EgressThreadMapper>
 #else

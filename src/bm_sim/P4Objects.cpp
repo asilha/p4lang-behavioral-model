@@ -1,4 +1,5 @@
-/* Copyright 2013-present Barefoot Networks, Inc.
+/* Copyright 2013-2019 Barefoot Networks, Inc.
+ * Copyright 2019 VMware, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,12 +15,13 @@
  */
 
 /*
- * Antonin Bas (antonin@barefootnetworks.com)
+ * Antonin Bas
  *
  */
 
 #include <bm/bm_sim/P4Objects.h>
 #include <bm/bm_sim/phv.h>
+#include <bm/bm_sim/actions.h>
 
 #include <iostream>
 #include <istream>
@@ -42,7 +44,7 @@ using std::string;
 namespace {
 
 constexpr int required_major_version = 2;
-constexpr int max_minor_version = 18;
+constexpr int max_minor_version = 23;
 // not needed for now
 // constexpr int min_minor_version = 0;
 
@@ -116,10 +118,6 @@ using EFormat = ExceptionFormatter;
 }  // namespace
 
 
-enum class P4Objects::ExprType {
-  UNKNOWN, DATA, HEADER, HEADER_STACK, BOOL, UNION, UNION_STACK
-};
-
 std::string
 P4Objects::get_json_version_string() {
   return get_version_str(required_major_version, max_minor_version);
@@ -128,115 +126,11 @@ P4Objects::get_json_version_string() {
 void
 P4Objects::build_expression(const Json::Value &json_expression,
                             Expression *expr) {
-  ExprType expr_type(ExprType::UNKNOWN);
+  ExprType expr_type;
   build_expression(json_expression, expr, &expr_type);
 }
 
 namespace {
-
-using ExprType = P4Objects::ExprType;
-
-ExprOpcode get_eq_opcode(ExprType expr_type) {
-  switch (expr_type) {
-    case ExprType::DATA:
-      return ExprOpcode::EQ_DATA;
-    case ExprType::HEADER:
-      return ExprOpcode::EQ_HEADER;
-    case ExprType::BOOL:
-      return ExprOpcode::EQ_BOOL;
-    case ExprType::UNION:
-      return ExprOpcode::EQ_UNION;
-    default:
-      break;
-  }
-  assert(0);
-  return ExprOpcode::EQ_DATA;
-}
-
-ExprOpcode get_neq_opcode(ExprType expr_type) {
-  switch (expr_type) {
-    case ExprType::DATA:
-      return ExprOpcode::NEQ_DATA;
-    case ExprType::HEADER:
-      return ExprOpcode::NEQ_HEADER;
-    case ExprType::BOOL:
-      return ExprOpcode::NEQ_BOOL;
-    case ExprType::UNION:
-      return ExprOpcode::NEQ_UNION;
-    default:
-      break;
-  }
-  assert(0);
-  return ExprOpcode::NEQ_DATA;
-}
-
-// TODO(antonin): should this information be in expressions.h?
-ExprType get_opcode_type(ExprOpcode opcode) {
-  switch (opcode) {
-    case ExprOpcode::LOAD_FIELD:
-    case ExprOpcode::LOAD_CONST:
-    case ExprOpcode::LOAD_LOCAL:
-    case ExprOpcode::LOAD_REGISTER_REF:
-    case ExprOpcode::LOAD_REGISTER_GEN:
-    case ExprOpcode::LOAD_LAST_HEADER_STACK_FIELD:
-    case ExprOpcode::ADD:
-    case ExprOpcode::SUB:
-    case ExprOpcode::MOD:
-    case ExprOpcode::DIV:
-    case ExprOpcode::MUL:
-    case ExprOpcode::SHIFT_LEFT:
-    case ExprOpcode::SHIFT_RIGHT:
-    case ExprOpcode::BIT_AND:
-    case ExprOpcode::BIT_OR:
-    case ExprOpcode::BIT_XOR:
-    case ExprOpcode::BIT_NEG:
-    case ExprOpcode::TWO_COMP_MOD:
-    case ExprOpcode::USAT_CAST:
-    case ExprOpcode::SAT_CAST:
-    case ExprOpcode::BOOL_TO_DATA:
-    case ExprOpcode::LAST_STACK_INDEX:
-    case ExprOpcode::SIZE_STACK:
-    case ExprOpcode::ACCESS_FIELD:
-      return ExprType::DATA;
-    case ExprOpcode::LOAD_BOOL:
-    case ExprOpcode::EQ_DATA:
-    case ExprOpcode::NEQ_DATA:
-    case ExprOpcode::GT_DATA:
-    case ExprOpcode::LT_DATA:
-    case ExprOpcode::GET_DATA:
-    case ExprOpcode::LET_DATA:
-    case ExprOpcode::EQ_HEADER:
-    case ExprOpcode::NEQ_HEADER:
-    case ExprOpcode::EQ_UNION:
-    case ExprOpcode::NEQ_UNION:
-    case ExprOpcode::EQ_BOOL:
-    case ExprOpcode::NEQ_BOOL:
-    case ExprOpcode::AND:
-    case ExprOpcode::OR:
-    case ExprOpcode::NOT:
-    case ExprOpcode::VALID_HEADER:
-    case ExprOpcode::VALID_UNION:
-    case ExprOpcode::DATA_TO_BOOL:
-      return ExprType::BOOL;
-    case ExprOpcode::LOAD_HEADER:
-    case ExprOpcode::DEREFERENCE_HEADER_STACK:
-    case ExprOpcode::ACCESS_UNION_HEADER:
-      return ExprType::HEADER;
-    case ExprOpcode::LOAD_HEADER_STACK:
-      return ExprType::HEADER_STACK;
-    case ExprOpcode::LOAD_UNION:
-    case ExprOpcode::DEREFERENCE_UNION_STACK:
-      return ExprType::UNION;
-    case ExprOpcode::LOAD_UNION_STACK:
-      return ExprType::UNION_STACK;
-    case ExprOpcode::TERNARY_OP:
-      return ExprType::UNKNOWN;
-    case ExprOpcode::SKIP:
-      break;
-  }
-  assert(0);
-  return ExprType::UNKNOWN;
-}
 
 std::unique_ptr<SourceInfo> object_source_info(const Json::Value &cfg_object) {
   std::string filename = "";
@@ -296,7 +190,9 @@ P4Objects::build_expression(const Json::Value &json_expression,
       build_expression(json_right, expr, &typeR);
       assert(typeL == typeR);
       assert(typeL != ExprType::UNKNOWN);
-      auto opcode = (op == "==") ? get_eq_opcode(typeL) : get_neq_opcode(typeL);
+      auto opcode = (op == "==") ?
+          ExprOpcodesUtils::get_eq_opcode(typeL) :
+          ExprOpcodesUtils::get_neq_opcode(typeL);
       expr->push_back_op(opcode);
       *expr_type = ExprType::BOOL;
     } else if (op == "access_field") {
@@ -312,7 +208,7 @@ P4Objects::build_expression(const Json::Value &json_expression,
 
       auto opcode = ExprOpcodesMap::get_opcode(op);
       expr->push_back_op(opcode);
-      *expr_type = get_opcode_type(opcode);
+      *expr_type = ExprOpcodesUtils::get_opcode_type(opcode);
     }
   } else if (type == "header") {
     auto header_id = get_header_id_cfg(json_value.asString());
@@ -389,7 +285,7 @@ P4Objects::build_expression(const Json::Value &json_expression,
   }
 }
 
-int
+void
 P4Objects::add_primitive_to_action(const Json::Value &cfg_primitive,
                                    ActionFn *action_fn) {
   const auto primitive_name = cfg_primitive["op"].asString();
@@ -417,125 +313,137 @@ P4Objects::add_primitive_to_action(const Json::Value &cfg_primitive,
   }
 
   for (const auto &cfg_parameter : cfg_primitive_parameters) {
-    const auto type = cfg_parameter["type"].asString();
-
-    if (type == "hexstr") {
-      const auto value_hexstr = cfg_parameter["value"].asString();
-      action_fn->parameter_push_back_const(Data(value_hexstr));
-    } else if (type == "runtime_data") {
-      auto action_data_offset = cfg_parameter["value"].asUInt();
-      auto runtime_data_size = action_fn->get_num_params();
-      if (action_data_offset >= runtime_data_size) {
-        throw json_exception(
-            EFormat() << "Invalid 'runtime_data' parameter reference in "
-                      << "action '" << action_fn->get_name() << "' when "
-                      << "calling primitive '" << primitive_name << "': trying "
-                      << "to use parameter at offset " << action_data_offset
-                      << " but action only has " << runtime_data_size
-                      << " parameter(s)",
-            cfg_parameter);
-      }
-      action_fn->parameter_push_back_action_data(action_data_offset);
-    } else if (type == "header") {
-      const auto header_name = cfg_parameter["value"].asString();
-      auto header_id = get_header_id_cfg(header_name);
-      action_fn->parameter_push_back_header(header_id);
-
-      enable_arith(header_id);
-    } else if (type == "field") {
-      const auto &cfg_value_field = cfg_parameter["value"];
-      const auto header_name = cfg_value_field[0].asString();
-      auto header_id = get_header_id_cfg(header_name);
-      const auto field_name = cfg_value_field[1].asString();
-      auto field_offset = get_field_offset(header_id, field_name);
-      action_fn->parameter_push_back_field(header_id, field_offset);
-
-      enable_arith(header_id, field_offset);
-    } else if (type == "calculation") {
-      const auto name = cfg_parameter["value"].asString();
-      auto calculation = get_named_calculation_cfg(name);
-      action_fn->parameter_push_back_calculation(calculation);
-    } else if (type == "meter_array") {
-      const auto name = cfg_parameter["value"].asString();
-      auto meter = get_meter_array_cfg(name);
-      action_fn->parameter_push_back_meter_array(meter);
-    } else if (type == "counter_array") {
-      const auto name = cfg_parameter["value"].asString();
-      auto counter = get_counter_array_cfg(name);
-      action_fn->parameter_push_back_counter_array(counter);
-    } else if (type == "register_array") {
-      const auto name = cfg_parameter["value"].asString();
-      auto register_array = get_register_array_cfg(name);
-      action_fn->parameter_push_back_register_array(register_array);
-    } else if (type == "header_stack") {
-      const auto header_stack_name = cfg_parameter["value"].asString();
-      auto header_stack_id = get_header_stack_id_cfg(header_stack_name);
-      action_fn->parameter_push_back_header_stack(header_stack_id);
-
-      phv_factory.enable_all_stack_field_arith(header_stack_id);
-    } else if (type == "expression") {
-      // TODO(Antonin): should this make the field case (and other) obsolete
-      // maybe if we can optimize this case
-      auto expr = new ArithExpression();
-      build_expression(cfg_parameter["value"], expr);
-      expr->build();
-      action_fn->parameter_push_back_expression(
-          std::unique_ptr<ArithExpression>(expr));
-    } else if (type == "register") {
-      // TODO(antonin): cheap optimization
-      // this may not be worth doing, and probably does not belong here
-      const auto &cfg_register = cfg_parameter["value"];
-      const auto register_array_name = cfg_register[0].asString();
-      auto &json_index = cfg_register[1];
-      assert(json_index.size() == 2);
-      if (json_index["type"].asString() == "hexstr") {
-        const auto idx = hexstr_to_int<unsigned int>(
-            json_index["value"].asString());
-        action_fn->parameter_push_back_register_ref(
-            get_register_array_cfg(register_array_name), idx);
-      } else {
-        auto idx_expr = new ArithExpression();
-        build_expression(json_index, idx_expr);
-        idx_expr->build();
-        action_fn->parameter_push_back_register_gen(
-            get_register_array_cfg(register_array_name),
-            std::unique_ptr<ArithExpression>(idx_expr));
-      }
-    } else if (type == "extern") {
-      const auto name = cfg_parameter["value"].asString();
-      auto extern_instance = get_extern_instance_cfg(name);
-      action_fn->parameter_push_back_extern_instance(extern_instance);
-    } else if (type == "string") {
-      action_fn->parameter_push_back_string(cfg_parameter["value"].asString());
-    } else if (type == "stack_field") {
-      const auto &cfg_value = cfg_parameter["value"];
-      const auto header_stack_name = cfg_value[0].asString();
-      auto header_stack_id = get_header_stack_id_cfg(header_stack_name);
-      auto *header_type = header_stack_to_type_map[header_stack_name];
-      const auto field_name = cfg_value[1].asString();
-      auto field_offset = header_type->get_field_offset(field_name);
-      action_fn->parameter_push_back_last_header_stack_field(
-          header_stack_id, field_offset);
-
-      phv_factory.enable_stack_field_arith(header_stack_id, field_offset);
-    } else if (type == "header_union") {
-      const auto header_union_name = cfg_parameter["value"].asString();
-      auto header_union_id = get_header_union_id_cfg(header_union_name);
-      action_fn->parameter_push_back_header_union(header_union_id);
-    } else if (type == "header_union_stack") {
-      const auto header_union_stack_name = cfg_parameter["value"].asString();
-      auto header_union_stack_id = get_header_union_stack_id_cfg(
-          header_union_stack_name);
-      action_fn->parameter_push_back_header_union_stack(header_union_stack_id);
-      phv_factory.enable_all_union_stack_field_arith(header_union_stack_id);
-    } else {
-      throw json_exception(
-          EFormat() << "Parameter type '" << type << "' not supported",
-          cfg_parameter);
-      return 1;
-    }
+    process_single_param(action_fn, cfg_parameter, primitive_name);
   }
-  return 0;
+}
+
+void
+P4Objects::process_single_param(ActionFn* action_fn,
+                                const Json::Value &cfg_parameter,
+                                const std::string &primitive_name) {
+  const auto type = cfg_parameter["type"].asString();
+
+  if (type == "hexstr") {
+    const auto value_hexstr = cfg_parameter["value"].asString();
+    action_fn->parameter_push_back_const(Data(value_hexstr));
+  } else if (type == "parameters_vector") {
+    action_fn->parameter_start_vector();
+    for (const auto &cfg_parameter_value : cfg_parameter["value"]) {
+      process_single_param(action_fn, cfg_parameter_value, primitive_name);
+    }
+    action_fn->parameter_end_vector();
+  } else if (type == "runtime_data") {
+    auto action_data_offset = cfg_parameter["value"].asUInt();
+    auto runtime_data_size = action_fn->get_num_params();
+    if (action_data_offset >= runtime_data_size) {
+      throw json_exception(
+          EFormat() << "Invalid 'runtime_data' parameter reference in "
+                    << "action '" << action_fn->get_name() << "' when "
+                    << "calling primitive '" << primitive_name << "': trying "
+                    << "to use parameter at offset " << action_data_offset
+                    << " but action only has " << runtime_data_size
+                    << " parameter(s)",
+          cfg_parameter);
+    }
+    action_fn->parameter_push_back_action_data(action_data_offset);
+  } else if (type == "header") {
+    const auto header_name = cfg_parameter["value"].asString();
+    auto header_id = get_header_id_cfg(header_name);
+    action_fn->parameter_push_back_header(header_id);
+
+    enable_arith(header_id);
+  } else if (type == "field") {
+    const auto &cfg_value_field = cfg_parameter["value"];
+    const auto header_name = cfg_value_field[0].asString();
+    auto header_id = get_header_id_cfg(header_name);
+    const auto field_name = cfg_value_field[1].asString();
+    auto field_offset = get_field_offset(header_id, field_name);
+    action_fn->parameter_push_back_field(header_id, field_offset);
+
+    enable_arith(header_id, field_offset);
+  } else if (type == "calculation") {
+    const auto name = cfg_parameter["value"].asString();
+    auto calculation = get_named_calculation_cfg(name);
+    action_fn->parameter_push_back_calculation(calculation);
+  } else if (type == "meter_array") {
+    const auto name = cfg_parameter["value"].asString();
+    auto meter = get_meter_array_cfg(name);
+    action_fn->parameter_push_back_meter_array(meter);
+  } else if (type == "counter_array") {
+    const auto name = cfg_parameter["value"].asString();
+    auto counter = get_counter_array_cfg(name);
+    action_fn->parameter_push_back_counter_array(counter);
+  } else if (type == "register_array") {
+    const auto name = cfg_parameter["value"].asString();
+    auto register_array = get_register_array_cfg(name);
+    action_fn->parameter_push_back_register_array(register_array);
+  } else if (type == "header_stack") {
+    const auto header_stack_name = cfg_parameter["value"].asString();
+    auto header_stack_id = get_header_stack_id_cfg(header_stack_name);
+    action_fn->parameter_push_back_header_stack(header_stack_id);
+
+    phv_factory.enable_all_stack_field_arith(header_stack_id);
+  } else if (type == "expression") {
+    // TODO(Antonin): should this make the field case (and other) obsolete
+    // maybe if we can optimize this case
+    auto expr = new Expression();
+    ExprType expr_type;
+    build_expression(cfg_parameter["value"], expr, &expr_type);
+    expr->build();
+    action_fn->parameter_push_back_expression(
+        std::unique_ptr<Expression>(expr));
+  } else if (type == "register") {
+    // TODO(antonin): cheap optimization
+    // this may not be worth doing, and probably does not belong here
+    const auto &cfg_register = cfg_parameter["value"];
+    const auto register_array_name = cfg_register[0].asString();
+    auto &json_index = cfg_register[1];
+    assert(json_index.size() == 2);
+    if (json_index["type"].asString() == "hexstr") {
+      const auto idx = hexstr_to_int<unsigned int>(
+          json_index["value"].asString());
+      action_fn->parameter_push_back_register_ref(
+          get_register_array_cfg(register_array_name), idx);
+    } else {
+      auto idx_expr = new ArithExpression();
+      build_expression(json_index, idx_expr);
+      idx_expr->build();
+      action_fn->parameter_push_back_register_gen(
+          get_register_array_cfg(register_array_name),
+          std::unique_ptr<ArithExpression>(idx_expr));
+    }
+  } else if (type == "extern") {
+    const auto name = cfg_parameter["value"].asString();
+    auto extern_instance = get_extern_instance_cfg(name);
+    action_fn->parameter_push_back_extern_instance(extern_instance);
+  } else if (type == "string") {
+    action_fn->parameter_push_back_string(cfg_parameter["value"].asString());
+  } else if (type == "stack_field") {
+    const auto &cfg_value = cfg_parameter["value"];
+    const auto header_stack_name = cfg_value[0].asString();
+    auto header_stack_id = get_header_stack_id_cfg(header_stack_name);
+    auto *header_type = header_stack_to_type_map[header_stack_name];
+    const auto field_name = cfg_value[1].asString();
+    auto field_offset = header_type->get_field_offset(field_name);
+    action_fn->parameter_push_back_last_header_stack_field(
+        header_stack_id, field_offset);
+
+    phv_factory.enable_stack_field_arith(header_stack_id, field_offset);
+  } else if (type == "header_union") {
+    const auto header_union_name = cfg_parameter["value"].asString();
+    auto header_union_id = get_header_union_id_cfg(header_union_name);
+    action_fn->parameter_push_back_header_union(header_union_id);
+  } else if (type == "header_union_stack") {
+    const auto header_union_stack_name = cfg_parameter["value"].asString();
+    auto header_union_stack_id = get_header_union_stack_id_cfg(
+        header_union_stack_name);
+    action_fn->parameter_push_back_header_union_stack(header_union_stack_id);
+    phv_factory.enable_all_union_stack_field_arith(header_union_stack_id);
+  } else {
+    throw json_exception(
+        EFormat() << "Parameter type '" << type << "' not supported",
+        cfg_parameter);
+  }
 }
 
 void
@@ -1031,7 +939,13 @@ P4Objects::init_parsers(const Json::Value &cfg_root, InitState *init_state) {
           ArithExpression VL_expr;
           if (op_type == "extract_VL") {
             const auto &cfg_VL_expr = cfg_parameters[1];
-            assert(cfg_VL_expr["type"].asString() == "expression");
+            if (cfg_VL_expr["type"].asString() != "expression") {
+              throw json_exception(
+                  EFormat() << "Parser 'extract_VL' operation has invalid "
+                            << "length type '" << cfg_VL_expr["type"].asString()
+                            << "', expected 'expression'",
+                  cfg_VL_expr);
+            }
             build_expression(cfg_VL_expr["value"], &VL_expr);
             VL_expr.build();
           }
@@ -1171,9 +1085,43 @@ P4Objects::init_parsers(const Json::Value &cfg_root, InitState *init_state) {
           parse_state->add_method_call(action_fn.get());
           parse_methods.push_back(std::move(action_fn));
         } else if (op_type == "shift") {
-          assert(cfg_parameters.size() == 1);
+          if (cfg_parameters.size() != 1) {
+            throw json_exception(
+                EFormat() << "Parser 'shift' operation has invalid number of "
+                          << "arguments, expected " << 1,
+                cfg_parser_op);
+          }
           auto shift_bytes = static_cast<size_t>(cfg_parameters[0].asInt());
           parse_state->add_shift(shift_bytes);
+        } else if (op_type == "advance") {
+          if (cfg_parameters.size() != 1) {
+            throw json_exception(
+                EFormat() << "Parser 'advance' operation has invalid number of "
+                          << "arguments, expected " << 1,
+                cfg_parser_op);
+          }
+          const auto &shift_type = cfg_parameters[0]["type"].asString();
+          if (shift_type == "field") {
+            const auto shift = field_info(
+                cfg_parameters[0]["value"][0].asString(),
+                cfg_parameters[0]["value"][1].asString());
+            parse_state->add_advance_from_field(
+                std::get<0>(shift), std::get<1>(shift));
+            enable_arith(std::get<0>(shift), std::get<1>(shift));
+          } else if (shift_type == "hexstr") {
+            parse_state->add_advance_from_data(
+                Data(cfg_parameters[0]["value"].asString()));
+          } else if (shift_type == "expression") {
+            ArithExpression expr;
+            build_expression(cfg_parameters[0]["value"], &expr);
+            expr.build();
+            parse_state->add_advance_from_expression(expr);
+          } else {
+            throw json_exception(
+                EFormat() << "Parser 'advance' operation has unsupported "
+                          << "parameter type '" << shift_type << "'",
+                cfg_parser_op);
+          }
         } else {
           throw json_exception(
               EFormat() << "Parser op '" << op_type << "'not supported",
@@ -1315,6 +1263,16 @@ P4Objects::init_deparsers(const Json::Value &cfg_root) {
     p4object_id_t deparser_id = cfg_deparser["id"].asInt();
     dup_id_checker.add(deparser_id);
     Deparser *deparser = new Deparser(deparser_name, deparser_id);
+
+    const Json::Value &cfg_deparser_primitives = cfg_deparser["primitives"];
+    for (const auto &cfg_deparser_primitive : cfg_deparser_primitives) {
+      const string primitive_name = cfg_deparser_primitive["op"].asString();
+      std::unique_ptr<ActionFn> action_fn(new ActionFn(
+              primitive_name, 0, 0));
+      add_primitive_to_action(cfg_deparser_primitive, action_fn.get());
+      deparser->add_method_call(action_fn.get());
+      deparse_methods.push_back(std::move(action_fn));
+    }
 
     const Json::Value &cfg_ordered_headers = cfg_deparser["order"];
     for (const auto &cfg_header : cfg_ordered_headers) {

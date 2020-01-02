@@ -3,17 +3,17 @@
 
 #include <bm/config.h>
 
-#ifdef BM_P4THRIFT
-namespace thrift_provider = p4::thrift;
-#else
 namespace thrift_provider = apache::thrift;
-#endif
 
+#if BM_THRIFT_VERSION < 1300
 #ifdef BM_HAVE_THRIFT_STDCXX_H
 #include <thrift/stdcxx.h>
 namespace stdcxx = thrift_provider::stdcxx;
 #else
 namespace stdcxx = boost;
-#endif
+#endif  // BM_HAVE_THRIFT_STDCXX_H
+#else
+namespace stdcxx = std;
+#endif  // BM_THRIFT_VERSION < 1300
 
 #endif

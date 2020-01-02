@@ -23,6 +23,9 @@
 
 #include <bm/bm_sim/actions.h>
 
+#include <string>
+#include <vector>
+
 namespace bm {
 
 namespace core {
@@ -64,6 +67,24 @@ struct push : public ActionPrimitive<StackIface &, const Data &> {
 
 struct pop : public ActionPrimitive<StackIface &, const Data &> {
   void operator ()(StackIface &stack, const Data &num);
+};
+
+struct assert_ : public ActionPrimitive<const Data &> {
+  void operator ()(const Data &src);
+};
+
+struct assume_ : public ActionPrimitive<const Data &> {
+  void operator ()(const Data &src);
+};
+
+class exit_ : public ActionPrimitive<> {
+  void operator ()();
+};
+
+struct log_msg : public ActionPrimitive<const std::string &,
+                                        const std::vector<Data> > {
+  void operator ()(const std::string &format,
+                   const std::vector<Data> data_vector);
 };
 
 }  // namespace core

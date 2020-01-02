@@ -39,9 +39,11 @@ class SimpleSwitchGrpcEnv : public ::testing::Environment {
  public:
   // We make the switch a shared resource for all tests. This is mainly because
   // simple_switch detaches threads.
+  // TODO(antonin): the issue with this is that tests may affect each other; in
+  // particular tests which modify port operational status.
   void SetUp() override {
     auto &runner = SimpleSwitchGrpcRunner::get_instance(
-        256, true, SimpleSwitchGrpcBaseTest::grpc_server_addr,
+        true, SimpleSwitchGrpcBaseTest::grpc_server_addr,
         SimpleSwitchGrpcBaseTest::cpu_port,
         SimpleSwitchGrpcBaseTest::dp_grpc_server_addr);
     bm::OptionsParser parser;

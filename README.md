@@ -1,23 +1,29 @@
-# BEHAVIORAL MODEL REPOSITORY
+# BEHAVIORAL MODEL (bmv2)
 
 [![Build Status](https://travis-ci.org/p4lang/behavioral-model.svg?branch=master)](https://travis-ci.org/p4lang/behavioral-model)
 
-This is the second version of the P4 software switch (aka behavioral model),
-nicknamed bmv2. It is meant to replace the original version, p4c-behavioral, in
-the long run, although we do not have feature equivalence yet. Unlike
-p4c-behavioral, this new version is static (i.e. we do not need to auto-generate
-new code and recompile every time a modification is done to the P4 program) and
-written in C++11. For information on why we decided to write a new version of
-the behavioral model, please look at the FAQ below.
+This is the second version of the reference P4 software switch, nicknamed bmv2
+(for behavioral model version 2). The software switch is written in C++11. It
+takes as input a JSON file generated from your P4 program by a [P4
+compiler](https://github.com/p4lang/p4c) and interprets it to implement the
+packet-processing behavior specified by that P4 program.
 
 This repository contains code for several variations of the behavioral
 model, e.g. `simple_switch`, `simple_switch_grpc`, `psa_switch`, etc.
 See [here](targets/README.md) for more details on the differences
 between these.
 
+**bmv2 is not meant to be a production-grade software switch**. It is meant to
+be used as a tool for developing, testing and debugging P4 data planes and
+control plane software written for them. As such, the performance of bmv2 - in
+terms of throughput and latency - is significantly less than that of a
+production-grade software switch like [Open
+vSwitch](https://www.openvswitch.org/). For more information about the
+performance of bmv2, refer to this [document](docs/performance.md).
+
 ## Dependencies
 
-On Ubuntu 14.04, the following packages are required:
+On Ubuntu 16.04, the following packages are required:
 
 - automake
 - cmake
@@ -42,7 +48,7 @@ You also need to install the following from source. Feel free to use the
 install scripts under travis/.
 
 - [thrift 0.9.2](https://github.com/apache/thrift/releases/tag/0.9.2) or later
-  (up to 0.12.1)
+  (tested up to 0.12.1)
 - [nanomsg 1.0.0](https://github.com/nanomsg/nanomsg/releases/tag/1.0.0) or
   later
 
@@ -96,21 +102,34 @@ To run the unit tests, simply do:
 
 ## Running your P4 program
 
-To run your own P4 programs in bmv2, you first need to transform the P4 code
+To run your own P4 programs in bmv2, you first need to compile the P4 code
 into a json representation which can be consumed by the software switch. This
 representation will tell bmv2 which tables to initialize, how to configure the
-parser, ... It is produced by the [p4c-bm](https://github.com/p4lang/p4c-bm)
-tool. Please take a look at the
-[README](https://github.com/p4lang/p4c-bm/blob/master/README.rst) for this repo
-to find out how to install it. Once this is done, you can obtain the json file
-as follows:
+parser, ...
 
-    p4c-bm --json <path to JSON file> <path to P4 file>
+There are currently 2 P4 compilers available for bmv2 on p4lang:
+ * [p4c](https://github.com/p4lang/p4c) includes a bmv2 backend and is the
+   recommended compiler to use, as it supports both P4_14 and P4_16
+   programs. Refer to the
+   [README](https://github.com/p4lang/p4c/blob/master/README.md) for information
+   on how to install and use p4c. At the moment, the bmv2 p4c backend supports
+   the v1model architecture, with some tentative support for the PSA
+   architecture. P4_16 programs written for v1model can be executed with the
+   `simple_switch` binary, while programs written for PSA can be executed with
+   the `psa_switch` binary. See [here](targets/README.md) for more details on
+   the differences between these.
+ * [p4c-bm](https://github.com/p4lang/p4c-bm) is the legacy compiler for bmv2
+   (no longer actively maintained) and only supports P4_14 programs.
 
-The json file can now be 'fed' to bmv2. Assuming you are using the
-*simple_switch* target:
+Assuming you have installed the p4c compiler, you can obtain the json file for a
+P4_16 v1model program as follows:
 
-    sudo ./simple_switch -i 0@<iface0> -i 1@<iface1> <path to JSON file>
+    p4c --target bmv2 --arch v1model --std p4-16 <prog>.p4
+
+This will create a `<prog>.json` output file which can now be 'fed' to the bmv2
+`simple_switch` binary:
+
+    sudo ./simple_switch -i 0@<iface0> -i 1@<iface1> <prog>.json
 
 In this example \<iface0\> and \<iface1\> are the interfaces which are bound to
 the switch (as ports 0 and 1).
@@ -209,13 +228,18 @@ the above example), just provide the appropriate `simple_switch` binary to
 
 ## FAQ
 
-### Why did we need bmv2 ?
+### Why is throughput so low / why are so many packets dropped?
+
+bmv2 is not meant to be a production-grade software switch. For more information
+on bmv2 performance, please refer to this [document](docs/performance.md).
+
+### Why did we replace p4c-behavioral with bmv2?
 
 - The new C++ code is not auto-generated for each P4 program. This means that it
   becomes very easy and very fast to change your P4 program and test it
   again. The whole P4 development process becomes more efficient. Every time you
   change your P4 program, you simply need to produce the json for it using
-  p4c-bm and feed it to the bmv2 executable.
+  the p4c compiler and feed it to the bmv2 executable.
 - Because the bmv2 code is not auto-generated, we hope it is easier to
   understand. We hope this will encourage the community to contribute even more
   to the P4 software switch.
@@ -230,7 +254,7 @@ the above example), just provide the appropriate `simple_switch` binary to
   programming your device (parser, match-action pipeline, deparser) with P4, you
   can use bmv2 to reproduce the behavior of your device.
 
-### How do program my own target / switch architecture using bmv2 ?
+### How do program my own target / switch architecture using bmv2?
 
 You can take a look at the `targets/ directory` first. We have also started
 writing some doxygen documentation specifically targetted at programmers who
@@ -238,9 +262,9 @@ want to implement their own switch model using the bmv2 building blocks. You can
 generate this documentation yourself (if you have doxygen installed) by running
 `doxygen Doxyfile`. The output can be found under the `doxygen-out`
 directory. You can also browse this documentation
-[online](http://104.236.137.35/).
+[online](http://bmv2.org).
 
-### What else is new in bmv2 ?
+### What else is new in bmv2?
 
 - Arithmetic is now possible on arbitrarily wide fields (no more limited to <=
   32-bit fields) and **variable-length fields are now supported**.
@@ -250,7 +274,7 @@ directory. You can also browse this documentation
   parser transition,...) a message is broadcast on a nanomsg channel and any
   client can consume it.
 
-### Are all features supported yet ?
+### Are all features supported yet?
 
 At this time, we are aware of the following unsupported P4_14 features:
 - direct registers
@@ -261,11 +285,11 @@ submit an issue with the appropriate label on
 [Github](https://github.com/p4lang/behavioral-model/issues). Do not hesitate to
 contribute code yourself!
 
-### How do I signal a bug ?
+### How do I signal a bug?
 
 Please submit an issue with the appropriate label on
 [Github](https://github.com/p4lang/behavioral-model/issues).
 
-### How can I contribute ?
+### How can I contribute?
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).

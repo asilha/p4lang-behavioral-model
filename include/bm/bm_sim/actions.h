@@ -1,4 +1,5 @@
-/* Copyright 2013-present Barefoot Networks, Inc.
+/* Copyright 2013-2019 Barefoot Networks, Inc.
+ * Copyright 2019 VMware, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,7 +15,7 @@
  */
 
 /*
- * Antonin Bas (antonin@barefootnetworks.com)
+ * Antonin Bas
  *
  */
 
@@ -61,6 +62,7 @@
 //!   - `[const] HeaderStack &` for P4 header stacks
 //!   - `[const] HeaderUnionStack &` for P4 header union stacks
 //!   - `const std::string &` or `const char *` for strings
+//!   - `const std::vector<Data>` for lists of numerical values
 //!
 //! You can declare and register primitives anywhere in your switch target C++
 //! code.
@@ -159,16 +161,7 @@ struct ActionData {
   std::vector<Data> action_data{};
 };
 
-struct ActionEngineState {
-  Packet &pkt;
-  PHV &phv;
-  const ActionData &action_data;
-  const std::vector<Data> &const_values;
-
-  ActionEngineState(Packet *pkt,
-                    const ActionData &action_data,
-                    const std::vector<Data> &const_values);
-};
+struct ActionEngineState;
 
 class ExternType;
 
@@ -183,10 +176,11 @@ struct ActionParam {
         HEADER_STACK, LAST_HEADER_STACK_FIELD,
         CALCULATION,
         METER_ARRAY, COUNTER_ARRAY, REGISTER_ARRAY,
-        EXPRESSION,
+        EXPRESSION, EXPRESSION_HEADER, EXPRESSION_HEADER_STACK,
+        EXPRESSION_HEADER_UNION, EXPRESSION_HEADER_UNION_STACK,
         EXTERN_INSTANCE,
         STRING,
-        HEADER_UNION, HEADER_UNION_STACK} tag;
+        HEADER_UNION, HEADER_UNION_STACK, PARAMS_VECTOR} tag;
 
   union {
     unsigned int const_offset;
@@ -216,6 +210,13 @@ struct ActionParam {
 
     header_stack_id_t header_stack;
 
+    // for lists of numerical values, used for the log_msg primitive and nothing
+    // else at the moment
+    struct {
+      unsigned int start;
+      unsigned int end;
+    } params_vector;
+
     // special case when trying to access a field in the last header of a stack
     struct {
       header_stack_id_t header_stack;
@@ -235,17 +236,17 @@ struct ActionParam {
     RegisterArray *register_array;
 
     struct {
-      unsigned int offset;
+      unsigned int offset;  // only used for arithmetic ("Data") expressions
       // non owning pointer
       // in theory, could be an owning pointer, but the union makes this
       // complicated, so instead the ActionFn keeps a vector of owning pointers
-      ArithExpression *ptr;
+      Expression *ptr;
     } expression;
 
     ExternType *extern_instance;
 
     // I use a pointer here to avoid complications with the union; the string
-    // memory is owned by ActionFn (just like for ArithExpression above)
+    // memory is owned by ActionFn (just like for Expression above)
     const std::string *str;
 
     header_union_stack_id_t header_union_stack;
@@ -257,11 +258,23 @@ struct ActionParam {
   template <typename T> T to(ActionEngineState *state) const;
 };
 
+struct ActionEngineState {
+  Packet &pkt;
+  PHV &phv;
+  const ActionData &action_data;
+  const std::vector<Data> &const_values;
+  const std::vector<ActionParam> &parameters_vector;
+
+  ActionEngineState(Packet *pkt,
+                    const ActionData &action_data,
+                    const std::vector<Data> &const_values,
+                    const std::vector<ActionParam> &parameters_vector);
+};
+
 // template specializations for ActionParam "casting"
 // they have to be declared outside of the class declaration, and "inline" is
 // necessary to avoid linker errors
 
-// can only be a field or a register reference
 template <> inline
 Data &ActionParam::to<Data &>(ActionEngineState *state) const {
   static thread_local Data data_temp;
@@ -272,9 +285,12 @@ Data &ActionParam::to<Data &>(ActionEngineState *state) const {
     case ActionParam::REGISTER_REF:
       return register_ref.array->at(register_ref.idx);
     case ActionParam::REGISTER_GEN:
-      register_gen.idx->eval(state->phv, &data_temp,
-                             state->action_data.action_data);
+      register_gen.idx->eval_arith(state->phv, &data_temp,
+                                   state->action_data.action_data);
       return register_ref.array->at(data_temp.get<size_t>());
+    case ActionParam::EXPRESSION:
+      return expression.ptr->eval_arith_lvalue(&state->phv,
+                                               state->action_data.action_data);
     case ActionParam::LAST_HEADER_STACK_FIELD:
       return state->phv.get_header_stack(stack_field.header_stack).get_last()
           .get_field(stack_field.field_offset);
@@ -300,16 +316,16 @@ const Data &ActionParam::to<const Data &>(ActionEngineState *state) const {
     case ActionParam::REGISTER_REF:
       return register_ref.array->at(register_ref.idx);
     case ActionParam::REGISTER_GEN:
-      register_gen.idx->eval(state->phv, &data_temps[0],
-                             state->action_data.action_data);
+      register_gen.idx->eval_arith(state->phv, &data_temps[0],
+                                   state->action_data.action_data);
       return register_ref.array->at(data_temps[0].get<size_t>());
     case ActionParam::EXPRESSION:
       while (data_temps_size <= expression.offset) {
         data_temps.emplace_back();
         data_temps_size++;
       }
-      expression.ptr->eval(state->phv, &data_temps[expression.offset],
-                              state->action_data.action_data);
+      expression.ptr->eval_arith(state->phv, &data_temps[expression.offset],
+                                 state->action_data.action_data);
       return data_temps[expression.offset];
     case ActionParam::LAST_HEADER_STACK_FIELD:
       return state->phv.get_header_stack(stack_field.header_stack).get_last()
@@ -335,8 +351,15 @@ const Field &ActionParam::to<const Field &>(ActionEngineState *state) const {
 
 template <> inline
 Header &ActionParam::to<Header &>(ActionEngineState *state) const {
-  assert(tag == ActionParam::HEADER);
-  return state->phv.get_header(header);
+  switch (tag) {
+    case ActionParam::HEADER:
+      return state->phv.get_header(header);
+    case ActionParam::EXPRESSION_HEADER:
+      return expression.ptr->eval_header(&state->phv,
+                                         state->action_data.action_data);
+    default:
+      _BM_UNREACHABLE("Default switch case should not be reachable");
+  }
 }
 
 template <> inline
@@ -346,8 +369,15 @@ const Header &ActionParam::to<const Header &>(ActionEngineState *state) const {
 
 template <> inline
 HeaderStack &ActionParam::to<HeaderStack &>(ActionEngineState *state) const {
-  assert(tag == ActionParam::HEADER_STACK);
-  return state->phv.get_header_stack(header_stack);
+  switch (tag) {
+    case ActionParam::HEADER_STACK:
+      return state->phv.get_header_stack(header_stack);
+    case ActionParam::EXPRESSION_HEADER_STACK:
+      return expression.ptr->eval_header_stack(&state->phv,
+                                               state->action_data.action_data);
+    default:
+      _BM_UNREACHABLE("Default switch case should not be reachable");
+  }
 }
 
 template <> inline
@@ -361,8 +391,14 @@ StackIface &ActionParam::to<StackIface &>(ActionEngineState *state) const {
   switch (tag) {
     case HEADER_STACK:
       return state->phv.get_header_stack(header_stack);
+    case ActionParam::EXPRESSION_HEADER_STACK:
+      return expression.ptr->eval_header_stack(
+          &state->phv, state->action_data.action_data);
     case HEADER_UNION_STACK:
       return state->phv.get_header_union_stack(header_union_stack);
+    case ActionParam::EXPRESSION_HEADER_UNION_STACK:
+      return expression.ptr->eval_header_union_stack(
+          &state->phv, state->action_data.action_data);
     default:
       _BM_UNREACHABLE("Default switch case should not be reachable");
   }
@@ -376,8 +412,15 @@ const StackIface &ActionParam::to<const StackIface &>(
 
 template <> inline
 HeaderUnion &ActionParam::to<HeaderUnion &>(ActionEngineState *state) const {
-  assert(tag == ActionParam::HEADER_UNION);
-  return state->phv.get_header_union(header_union);
+  switch (tag) {
+    case ActionParam::HEADER_UNION:
+      return state->phv.get_header_union(header_union);
+    case ActionParam::EXPRESSION_HEADER_UNION:
+      return expression.ptr->eval_header_union(&state->phv,
+                                               state->action_data.action_data);
+    default:
+      _BM_UNREACHABLE("Default switch case should not be reachable");
+  }
 }
 
 template <> inline
@@ -389,8 +432,15 @@ const HeaderUnion &ActionParam::to<const HeaderUnion &>(
 template <> inline
 HeaderUnionStack &ActionParam::to<HeaderUnionStack &>(
     ActionEngineState *state) const {
-  assert(tag == ActionParam::HEADER_UNION_STACK);
-  return state->phv.get_header_union_stack(header_union_stack);
+  switch (tag) {
+    case ActionParam::HEADER_UNION_STACK:
+      return state->phv.get_header_union_stack(header_union_stack);
+    case ActionParam::EXPRESSION_HEADER_UNION_STACK:
+      return expression.ptr->eval_header_union_stack(
+          &state->phv, state->action_data.action_data);
+    default:
+      _BM_UNREACHABLE("Default switch case should not be reachable");
+  }
 }
 
 template <> inline
@@ -471,6 +521,29 @@ const char *ActionParam::to<const char *>(ActionEngineState *state) const {
   return str->c_str();
 }
 
+// used for primitives that take as a parameter a "list" of values. Currently we
+// only support "const std::vector<Data>" as the type used by the C++ primitive
+// and currently this is only used by log_msg.
+// TODO(antonin): more types (e.g. "const std::vector<const Data &>") if needed
+// we can support list of other value types as well, e.g. list of headers
+// we are not limited to using a vector as the data structure either
+template <> inline
+const std::vector<Data>
+ActionParam::to<const std::vector<Data>>(ActionEngineState *state) const {
+  _BM_ASSERT(tag == ActionParam::PARAMS_VECTOR && "not a params vector");
+  std::vector<Data> vec;
+
+  for (auto i = params_vector.start ; i < params_vector.end ; i++) {
+    // re-use previously-defined cast method; note that we use to<const Data &>
+    // and not to<const Data>, as it does not exists
+    // if something in the parameters_vector cannot be cast to "const Data &",
+    // the code will assert
+    vec.push_back(state->parameters_vector[i].to<const Data &>(state));
+  }
+
+  return vec;
+}
+
 /* This is adapted from stack overflow code:
    http://stackoverflow.com/questions/11044504/any-solution-to-unpack-a-vector-to-function-arguments-in-c
 */
@@ -535,6 +608,10 @@ class ActionPrimitive_ {
     this->p4objects = p4objects;
   }
 
+  void set_source_info(SourceInfo *source_info) {
+    call_source_info = source_info;
+  }
+
  protected:
   // This used to be regular members in ActionPrimitive, but there could be a
   // race condition. Making them thread_local solves the issue. I moved these
@@ -543,6 +620,7 @@ class ActionPrimitive_ {
   // (https://gcc.gnu.org/bugzilla/show_bug.cgi?id=60056).
   static thread_local Packet *pkt;
   static thread_local PHV *phv;
+  SourceInfo *call_source_info{nullptr};
 
   P4Objects *get_p4objects() {
     return p4objects;
@@ -632,12 +710,10 @@ class ActionFn :  public NamedP4Object {
   friend class ActionFnEntry;
 
  public:
-  ActionFn(const std::string &name, p4object_id_t id, size_t num_params)
-      : NamedP4Object(name, id), num_params(num_params) { }
-    ActionFn(const std::string &name, p4object_id_t id, size_t num_params,
-             std::unique_ptr<SourceInfo> source_info)
-      : NamedP4Object(name, id, std::move(source_info)),
-        num_params(num_params) { }
+  ActionFn(const std::string &name, p4object_id_t id, size_t num_params);
+
+  ActionFn(const std::string &name, p4object_id_t id, size_t num_params,
+           std::unique_ptr<SourceInfo> source_info);
 
   // these parameter_push_back_* methods are not very well named. They are used
   // to push arguments to the primitives; and are independent of the actual
@@ -660,9 +736,20 @@ class ActionFn :  public NamedP4Object {
   void parameter_push_back_meter_array(MeterArray *meter_array);
   void parameter_push_back_counter_array(CounterArray *counter_array);
   void parameter_push_back_register_array(RegisterArray *register_array);
-  void parameter_push_back_expression(std::unique_ptr<ArithExpression> expr);
+  void parameter_push_back_expression(std::unique_ptr<Expression> expr);
+  void parameter_push_back_expression(std::unique_ptr<Expression> expr,
+                                      ExprType expr_type);
   void parameter_push_back_extern_instance(ExternType *extern_instance);
   void parameter_push_back_string(const std::string &str);
+
+  // These methods are used when we need to push a "vector of parameters"
+  // (i.e. when a primitive, such as log_msg, uses a list of values as one of
+  // its parameters). First parameter_start_vector is called to signal the
+  // beginning of the "vector of parameters", then the parameter_push_back_*
+  // methods are called as usual, and finally parameter_end_vector is called to
+  // signal the end.
+  void parameter_start_vector();
+  void parameter_end_vector();
 
   void push_back_primitive(ActionPrimitive_ *primitive,
                            std::unique_ptr<SourceInfo> source_info = nullptr);
@@ -672,19 +759,21 @@ class ActionFn :  public NamedP4Object {
   size_t get_num_params() const;
 
  private:
+  using ParameterList = std::vector<ActionParam>;
+
   std::vector<ActionPrimitiveCall> primitives{};
-  std::vector<ActionParam> params{};
+  ParameterList params{};
+  ParameterList sub_params{};
   RegisterSync register_sync{};
   std::vector<Data> const_values{};
   // should I store the objects in the vector, instead of pointers?
-  std::vector<std::unique_ptr<ArithExpression> > expressions{};
+  std::vector<std::unique_ptr<Expression> > expressions{};
   std::vector<std::string> strings{};
   size_t num_params;
 
  private:
   static size_t nb_data_tmps;
 };
-
 
 class ActionFnEntry {
  public:

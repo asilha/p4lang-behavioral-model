@@ -30,6 +30,9 @@
 #include <random>
 #include <thread>
 
+#include "simple_switch.h"
+#include "register_access.h"
+
 template <typename... Args>
 using ActionPrimitive = bm::ActionPrimitive<Args...>;
 
@@ -41,6 +44,11 @@ using bm::CounterArray;
 using bm::RegisterArray;
 using bm::NamedCalculation;
 using bm::HeaderStack;
+using bm::Logger;
+
+namespace {
+SimpleSwitch *simple_switch;
+}  // namespace
 
 class modify_field : public ActionPrimitive<Data &, const Data &> {
   void operator ()(Data &dst, const Data &src) {
@@ -59,8 +67,21 @@ class modify_field_rng_uniform
     using hash = std::hash<std::thread::id>;
     static thread_local engine generator(hash()(std::this_thread::get_id()));
     using distrib64 = std::uniform_int_distribution<uint64_t>;
-    distrib64 distribution(b.get_uint64(), e.get_uint64());
-    f.set(distribution(generator));
+    auto lo = b.get_uint64();
+    auto hi = e.get_uint64();
+    if (lo > hi) {
+        Logger::get()->warn("random result is not specified when lo > hi");
+        // Return without writing to the result field at all.  We
+        // should avoid the distrib64 call below, since its behavior
+        // is not defined in this case.
+        return;
+    }
+    distrib64 distribution(lo, hi);
+    auto rand_val = distribution(generator);
+    BMLOG_TRACE_PKT(get_packet(),
+                    "random(lo={}, hi={}) = {}",
+                    lo, hi, rand_val);
+    f.set(rand_val);
   }
 };
 
@@ -142,7 +163,8 @@ REGISTER_PRIMITIVE(shift_right);
 
 class drop : public ActionPrimitive<> {
   void operator ()() {
-    get_field("standard_metadata.egress_spec").set(511);
+    get_field("standard_metadata.egress_spec").set(
+        simple_switch->get_drop_port());
     if (get_phv().has_field("intrinsic_metadata.mcast_grp")) {
       get_field("intrinsic_metadata.mcast_grp").set(0);
     }
@@ -151,19 +173,52 @@ class drop : public ActionPrimitive<> {
 
 REGISTER_PRIMITIVE(drop);
 
-class exit_ : public ActionPrimitive<> {
-  void operator ()() {
-    get_packet().mark_for_exit();
+class mark_to_drop : public ActionPrimitive<Header &> {
+  void operator ()(Header &std_hdr) {
+    if (egress_spec_offset == -1) {
+      const auto &header_type = std_hdr.get_header_type();
+      egress_spec_offset = header_type.get_field_offset("egress_spec");
+      if (egress_spec_offset == -1) {
+        Logger::get()->critical(
+            "Header {} must be of type standard_metadata but it does not have "
+            "an 'egress_spec' field",
+            std_hdr.get_name());
+        return;
+      }
+
+      mcast_grp_offset = header_type.get_field_offset("mcast_grp");
+    }
+    std_hdr.get_field(egress_spec_offset).set(
+        simple_switch->get_drop_port());
+
+    // This assumes that the P4 program is compiled with p4c and that the
+    // "mcast_grp" field is defined in the same standard metadata header as
+    // "egress_spec" in v1model.p4. That's a reasonnable assumption since
+    // mark_to_drop is a recent primitive and was added specifically for
+    // p4c. Even if the field is aliased as "intrinsic_metadata.mcast_grp" and
+    // that alias is used in other parts of simple_switch, everything should
+    // work fine. We could even consider erroring out if "mcast_grp" is not
+    // found like we do for "egress_spec".
+    if (mcast_grp_offset != -1) std_hdr.get_field(mcast_grp_offset).set(0);
   }
+
+  // bmv2 creates a new instance of mark_to_drop every time the primitive is
+  // called in the JSON, so it is safe to use data members for this. For a
+  // given P4 program, the offsets should be the same for all instances of
+  // mark_to_drop assuming p4c generates a correct JSON. When loading a new P4
+  // program, the offsets *may* be different (but that's unlikely).
+  int egress_spec_offset{-1};
+  int mcast_grp_offset{-1};
 };
 
-REGISTER_PRIMITIVE_W_NAME("exit", exit_);
+REGISTER_PRIMITIVE(mark_to_drop);
 
 class generate_digest : public ActionPrimitive<const Data &, const Data &> {
   void operator ()(const Data &receiver, const Data &learn_id) {
     // discared receiver for now
     (void) receiver;
-    get_field("intrinsic_metadata.lf_field_list").set(learn_id);
+    auto &packet = get_packet();
+    RegisterAccess::set_lf_field_list(&packet, learn_id.get<uint16_t>());
   }
 };
 
@@ -177,7 +232,9 @@ class add_header : public ActionPrimitive<Header &> {
       hdr.mark_valid();
       // updated the length packet register (register 0)
       auto &packet = get_packet();
-      packet.set_register(0, packet.get_register(0) + hdr.get_nbytes_packet());
+      packet.set_register(RegisterAccess::PACKET_LENGTH_REG_IDX,
+          packet.get_register(RegisterAccess::PACKET_LENGTH_REG_IDX) +
+          hdr.get_nbytes_packet());
     }
   }
 };
@@ -197,7 +254,9 @@ class remove_header : public ActionPrimitive<Header &> {
     if (hdr.is_valid()) {
       // updated the length packet register (register 0)
       auto &packet = get_packet();
-      packet.set_register(0, packet.get_register(0) - hdr.get_nbytes_packet());
+      packet.set_register(RegisterAccess::PACKET_LENGTH_REG_IDX,
+          packet.get_register(RegisterAccess::PACKET_LENGTH_REG_IDX) -
+          hdr.get_nbytes_packet());
       hdr.mark_invalid();
     }
   }
@@ -213,14 +272,20 @@ class copy_header : public ActionPrimitive<Header &, const Header &> {
 
 REGISTER_PRIMITIVE(copy_header);
 
-/* standard_metadata.clone_spec will contain the mirror id (16 LSB) and the
-   field list id to copy (16 MSB) */
 class clone_ingress_pkt_to_egress
   : public ActionPrimitive<const Data &, const Data &> {
-  void operator ()(const Data &clone_spec, const Data &field_list_id) {
-    Field &f_clone_spec = get_field("standard_metadata.clone_spec");
-    f_clone_spec.shift_left(field_list_id, 16);
-    f_clone_spec.add(f_clone_spec, clone_spec);
+  void operator ()(const Data &mirror_session_id, const Data &field_list_id) {
+    auto &packet = get_packet();
+    // We limit mirror_session_id values to small enough values that
+    // we can use one of the bit positions as a "clone was performed"
+    // indicator, making mirror_seesion_id stored here always non-0 if
+    // a clone was done.  This enables cleanly supporting
+    // mirror_session_id == 0, in case that is ever helpful.
+    RegisterAccess::set_clone_mirror_session_id(&packet,
+        mirror_session_id.get<uint16_t>() |
+        RegisterAccess::MIRROR_SESSION_ID_VALID_MASK);
+    RegisterAccess::set_clone_field_list(&packet,
+        field_list_id.get<uint16_t>());
   }
 };
 
@@ -228,10 +293,14 @@ REGISTER_PRIMITIVE(clone_ingress_pkt_to_egress);
 
 class clone_egress_pkt_to_egress
   : public ActionPrimitive<const Data &, const Data &> {
-  void operator ()(const Data &clone_spec, const Data &field_list_id) {
-    Field &f_clone_spec = get_field("standard_metadata.clone_spec");
-    f_clone_spec.shift_left(field_list_id, 16);
-    f_clone_spec.add(f_clone_spec, clone_spec);
+  void operator ()(const Data &mirror_session_id, const Data &field_list_id) {
+    auto &packet = get_packet();
+    // See clone_ingress_pkt_to_egress for why the arithmetic.
+    RegisterAccess::set_clone_mirror_session_id(&packet,
+        mirror_session_id.get<uint16_t>() |
+        RegisterAccess::MIRROR_SESSION_ID_VALID_MASK);
+    RegisterAccess::set_clone_field_list(&packet,
+        field_list_id.get<uint16_t>());
   }
 };
 
@@ -239,10 +308,8 @@ REGISTER_PRIMITIVE(clone_egress_pkt_to_egress);
 
 class resubmit : public ActionPrimitive<const Data &> {
   void operator ()(const Data &field_list_id) {
-    if (get_phv().has_field("intrinsic_metadata.resubmit_flag")) {
-      get_phv().get_field("intrinsic_metadata.resubmit_flag")
-          .set(field_list_id);
-    }
+    auto &packet = get_packet();
+    RegisterAccess::set_resubmit_flag(&packet, field_list_id.get<uint16_t>());
   }
 };
 
@@ -250,10 +317,9 @@ REGISTER_PRIMITIVE(resubmit);
 
 class recirculate : public ActionPrimitive<const Data &> {
   void operator ()(const Data &field_list_id) {
-    if (get_phv().has_field("intrinsic_metadata.recirculate_flag")) {
-      get_phv().get_field("intrinsic_metadata.recirculate_flag")
-          .set(field_list_id);
-    }
+    auto &packet = get_packet();
+    RegisterAccess::set_recirculate_flag(&packet,
+                                         field_list_id.get<uint16_t>());
   }
 };
 
@@ -264,8 +330,17 @@ class modify_field_with_hash_based_offset
                            const NamedCalculation &, const Data &> {
   void operator ()(Data &dst, const Data &base,
                    const NamedCalculation &hash, const Data &size) {
-    uint64_t v =
-      (hash.output(get_packet()) % size.get<uint64_t>()) + base.get<uint64_t>();
+    auto b = base.get<uint64_t>();
+    auto orig_sz = size.get<uint64_t>();
+    auto sz = orig_sz;
+    if (sz == 0) {
+        sz = 1;
+        Logger::get()->warn("hash max given as 0, but treating it as 1");
+    }
+    auto v = (hash.output(get_packet()) % sz) + b;
+    BMLOG_TRACE_PKT(get_packet(),
+                    "hash(base={}, max={}) = {}",
+                    b, orig_sz, v);
     dst.set(v);
   }
 };
@@ -398,11 +473,10 @@ class truncate_ : public ActionPrimitive<const Data &> {
 
 REGISTER_PRIMITIVE_W_NAME("truncate", truncate_);
 
-// dummy function, which ensures that this unit is not discarded by the linker
-// it is being called by the constructor of SimpleSwitch
-// the previous alternative was to have all the primitives in a header file (the
-// primitives could also be placed in simple_switch.cpp directly), but I need
-// this dummy function if I want to keep the primitives in their own file
-int import_primitives() {
+// In addition to setting the simple_switch global variable, this function also
+// ensures that this unit is not discarded by the linker. It is being called by
+// the constructor of SimpleSwitch.
+int import_primitives(SimpleSwitch *sswitch) {
+  simple_switch = sswitch;
   return 0;
 }

@@ -17,7 +17,7 @@ fields.
 
 The P4_16 language also now has a Portable Switch Architecture (PSA)
 defined in [its own specification](https://p4.org/specs).  As of
-September 2018, a partial implementation of the PSA architecture has
+October 2019, a partial implementation of the PSA architecture has
 been done, but it is not yet complete.  It will be implemented in a
 separate executable program named `psa_switch`, separate from the
 `simple_switch` program described here.
@@ -52,16 +52,19 @@ Here are the fields:
   recirculated packets, the length of the packet in bytes.  For cloned
   or resubmitted packets, you may need to include this in a list of
   fields to preserve, otherwise its value will become 0.
-- `egress_spec` (sm14, v1m) - Can be assigned a value in ingress code
-  to control which output port a packet will go to.  The P4_14
-  primitive `drop`, and the v1model primitive action `mark_to_drop`,
-  have the side effect of assigning an implementation specific value
-  to this field (511 decimal for simple_switch), such that if
+- `egress_spec` (sm14, v1m) - Can be assigned a value in ingress code to
+  control which output port a packet will go to.  The P4_14 primitive
+  `drop`, and the v1model primitive action `mark_to_drop`, have the side
+  effect of assigning an implementation specific value DROP_PORT to this field
+  (511 decimal for simple_switch by default, but can be changed through
+  the `--drop-port` target-specific command-line option), such that if
   `egress_spec` has that value at the end of ingress processing, the
   packet will be dropped and not stored in the packet buffer, nor sent
-  to egress processing.  See the "after-ingress pseudocode" for
-  relative priority of this vs. other possible packet operations at
-  end of ingress.
+  to egress processing.  See the "after-ingress pseudocode" for relative
+  priority of this vs. other possible packet operations at end of
+  ingress.  If your P4 program assigns a value of DROP_PORT to `egress_spec`, it
+  will still behave according to the "after-ingress pseudocode", even if you
+  never call `mark_to_drop` (P4_16) or `drop` (P4_14).
 - `egress_port` (sm14, v1m) - Only intended to be accessed during
   egress processing, read only.  The output port this packet is
   destined to.
@@ -93,14 +96,6 @@ Here are the fields:
   0.  Calls to `verify_checksum` should be in the `VerifyChecksum`
   control in v1model, which is executed after the parser and before
   ingress.
-- `clone_spec` (v1m): should not be accessed directly. It is set by
-  the `clone` and `clone3` primitive actions in P4_16 programs, or the
-  `clone_ingress_pkt_to_egress` and `clone_egress_pkt_to_egress`
-  primitive actions for P4_14 programs, and is required for the packet
-  clone (aka mirror) feature. The "ingress to egress" clone primitive
-  action must be called from the ingress pipeline, and the "egress to
-  egress" clone primitive action must be called from the egress
-  pipeline.
 
 ## Intrinsic metadata
 
@@ -130,11 +125,8 @@ header_type intrinsic_metadata_t {
     fields {
         ingress_global_timestamp : 48;
         egress_global_timestamp : 48;
-        lf_field_list : 8;
         mcast_grp : 16;
         egress_rid : 16;
-        resubmit_flag : 8;
-        recirculate_flag : 8;
     }
 }
 metadata intrinsic_metadata_t intrinsic_metadata;
@@ -147,8 +139,6 @@ not be written to.
 starts egress processing. The clock is the same as for
 `ingress_global_timestamp`. This field should only be read from the egress
 pipeline, but should not be written to.
-- `lf_field_list`: used to store the learn id when calling `generate_digest`; do
-not access directly.
 - `mcast_grp`: needed for the multicast feature. This field needs to be written
 in the ingress pipeline when you wish the packet to be multicast. A value of 0
 means no multicast. This value must be one of a valid multicast group configured
@@ -158,32 +148,6 @@ end of ingress.
 - `egress_rid`: needed for the multicast feature. This field is only valid in
 the egress pipeline and can only be read from. It is used to uniquely identify
 multicast copies of the same ingress packet.
-- `resubmit_flag`: should not be accessed directly. It is set by the
-`resubmit` action primitive and is required for the resubmit
-feature. As a reminder, `resubmit` needs to be called in the ingress
-pipeline. See the "after-ingress pseudocode" for relative priority of
-this vs. other possible packet operations at end of ingress.
-- `recirculate_flag`: should not be accessed directly. It is set by the
-`recirculate` action primitive and is required for the recirculate feature. As a
-reminder, `recirculate` needs to be called from the egress pipeline.
-See the "after-egress pseudocode" for the relative priority of this
-vs. other possible packet operations at the end of egress processing.
-
-Several of these fields should be considered internal implementation
-details for how simple_switch implements some packet processing
-features.  They are: `lf_field_list`, `resubmit_flag`,
-`recirculate_flag`, and `clone_spec`.  They have the following
-properties in common:
-
-- They are initialized to 0, and are assigned a compiler-chosen non-0
-  value when the corresponding primitive action is called.
-- Your P4 program should never assign them a value directly.
-- Reading the values may be helpful for debugging.
-- Reading them may also be useful for knowing whether the
-  corresponding primitive action was called earlier in the
-  execution of the P4 program, but if you want to know whether such a
-  use is portable to P4 implementations other than simple_switch, you
-  will have to check the documentation for that other implementation.
 
 ### `queueing_metadata` header
 
@@ -237,17 +201,17 @@ file](../targets/simple_switch/primitives.cpp).
 After-ingress pseudocode - the short version:
 
 ```
-if (clone_spec != 0) {      // because your code called a clone primitive action
+if (a clone primitive action was called) {
     make a clone of the packet with details configured for the clone session
 }
-if (lf_field_list != 0) {   // because your code called generate_digest
+if (digest to generate) {   // because your code called generate_digest
     send a digest message to the control plane software
 }
-if (resubmit_flag != 0) {   // because your code called resubmit
+if (resubmit was called) {
     start ingress processing over again for the original packet
 } else if (mcast_grp != 0) {  // because your code assigned a value to mcast_grp
     multicast the packet to the output port(s) configured for group mcast_grp
-} else if (egress_spec == 511) {  // because your code called drop/mark_to_drop
+} else if (egress_spec == DROP_PORT) {  // e.g. because your code called drop/mark_to_drop
     Drop packet.
 } else {
     unicast the packet to the port equal to egress_spec
@@ -259,7 +223,7 @@ after ingress processing is complete.  The longer more detailed
 version:
 
 ```
-if (clone_spec != 0) {
+if (a clone primitive action was called) {
     // This condition will be true if your code called the `clone` or
     // `clone3` primitive action from a P4_16 program, or the
     // `clone_ingress_pkt_to_egress` primitive action in a P4_14
@@ -280,29 +244,27 @@ if (clone_spec != 0) {
     If it was a clone3 (P4_16) or clone_ingress_pkt_to_egress (P4_14)
     action, also preserve the final ingress values of the metadata
     fields specified in the field list argument, except assign
-    clone_spec a value of 0 always, and instance_type a value of
-    PKT_INSTANCE_TYPE_INGRESS_CLONE.
+    instance_type a value of PKT_INSTANCE_TYPE_INGRESS_CLONE.
 
     The cloned packet will continue processing at the beginning of
     your egress code.
     // fall through to code below
 }
-if (lf_field_list != 0) {
+if (digest to generate) {
     // This condition will be true if your code called the
     // generate_digest primitive action during ingress processing.
     Send a digest message to the control plane that contains the
     values of the fields in the specified field list.
     // fall through to code below
 }
-if (resubmit_flag != 0) {
+if (resubmit was called) {
     // This condition will be true if your code called the resubmit
     // primitive action during ingress processing.
     Start ingress over again for this packet, with its original
     unmodified packet contents and metadata values.  Preserve the
     final ingress values of any fields specified in the field list
     given as an argument to the last resubmit() primitive operation
-    called, except assign resubmit_flag a value of 0 always, and
-    instance_type a value of PKT_INSTANCE_TYPE_RESUBMIT.
+    called, except assign instance_type a value of PKT_INSTANCE_TYPE_RESUBMIT.
 } else if (mcast_grp != 0) {
     // This condition will be true if your code made an assignment to
     // standard_metadata.mcast_grp during ingress processing.  There
@@ -314,7 +276,7 @@ if (resubmit_flag != 0) {
     for the mcast_grp value.  Enqueue each one in the appropriate
     packet buffer queue.  The instance_type of each will be
     PKT_INSTANCE_TYPE_REPLICATION.
-} else if (egress_spec == 511) {
+} else if (egress_spec == DROP_PORT) {
     // This condition will be true if your code called the
     // mark_to_drop (P4_16) or drop (P4_14) primitive action during
     // ingress processing.
@@ -328,12 +290,12 @@ if (resubmit_flag != 0) {
 After-egress pseudocode - the short version:
 
 ```
-if (clone_spec != 0) {    // because your code called a clone primitive action
+if (a clone primitive action was called) {
     make a clone of the packet with details configured for the clone session
 }
-if (egress_spec == 511) {  // because your code called drop/mark_to_drop
+if (egress_spec == DROP_PORT) {  // e.g. because your code called drop/mark_to_drop
     Drop packet.
-} else if (recirculate_flag != 0) {  // because your code called recirculate
+} else if (recirculate was called) {
     start ingress processing over again for deparsed packet
 } else {
     Send the packet to the port in egress_port.
@@ -345,7 +307,7 @@ after egress processing is complete.  The longer more detailed
 version:
 
 ```
-if (clone_spec != 0) {
+if (a clone primitive action was called) {
     // This condition will be true if your code called the `clone` or
     // `clone3` primitive action from a P4_16 program, or the
     // `clone_egress_pkt_to_egress` primitive action in a P4_14
@@ -362,19 +324,18 @@ if (clone_spec != 0) {
     If it was a clone3 (P4_16) or clone_egress_pkt_to_egress (P4_14)
     action, also preserve the final egress values of the metadata
     fields specified in the field list argument, except assign
-    clone_spec a value of 0 always, and instance_type a value of
-    PKT_INSTANCE_TYPE_EGRESS_CLONE.
+    instance_type a value of PKT_INSTANCE_TYPE_EGRESS_CLONE.
 
     The cloned packet will continue processing at the beginning of
     your egress code.
     // fall through to code below
 }
-if (egress_spec == 511) {
+if (egress_spec == DROP_PORT) {
     // This condition will be true if your code called the
     // mark_to_drop (P4_16) or drop (P4_14) primitive action during
     // egress processing.
     Drop packet.
-} else if (recirculate_flag != 0) {
+} else if (recirculate was called) {
     // This condition will be true if your code called the recirculate
     // primitive action during egress processing.
     Start ingress over again, for the packet as constructed by the
@@ -382,8 +343,7 @@ if (egress_spec == 511) {
     ingress and egress processing.  Preserve the final egress values
     of any fields specified in the field list given as an argument to
     the last recirculate primitive action called, except assign
-    recirculate_flag a value of 0 always, and instance_type a value of
-    PKT_INSTANCE_TYPE_RECIRC.
+    instance_type a value of PKT_INSTANCE_TYPE_RECIRC.
 } else {
     Send the packet to the port in egress_port.  Since egress_port is
     read only during egress processing, note that its value must have
@@ -406,22 +366,27 @@ values:
 + `range` - defined in `v1model.p4`
 + `selector` - defined in `v1model.p4`
 
-`selector` is only supported for tables with an action profile or action
-selector implementation.
+`selector` is only supported for tables with an action selector
+implementation.
 
 If a table has more than one `lpm` key field, it is rejected by the `p4c` BMv2
 back end. This could be generalized slightly, as described below, but that
 restriction is in place as of the January 2019 version of `p4c`.
+
+
+### Range tables
 
 If a table has at least one `range` field, it is implemented internally as a
 `range` table in BMv2. Because a single search key could match mutiple entries,
 every entry must be assigned a numeric priority by the control plane software
 when it is installed. If multiple installed table entries match the same search
 key, one among them with the maximum numeric priority will "win", and its action
-performed. Note that winner is one with maximum numeric priority value if you
-use the P4Runtime API to specify the numeric priorities. Check the documentation
-of your control plane API if you use a different one, as some might choose to
-use the convention that minimum numeric priority values win over larger ones.
+performed.
+
+Note that winner is one with maximum numeric priority value if you use the
+P4Runtime API to specify the numeric priorities. Check the documentation of your
+control plane API if you use a different one, as some might choose to use the
+convention that minimum numeric priority values win over larger ones.
 
 A `range` table may have an `lpm` field. If so, the prefix length is used to
 determine whether a search key matches the entry, but the prefix length does
@@ -430,12 +395,23 @@ entries. Only the numeric priority supplied by the control plane software
 determines that. Because of this, it would be reasonable for a `range` table to
 support multiple `lpm` key fields, but as of January 2019 this is not supported.
 
+If a range table has entries defined via a `const entries` table property, then
+the relative priority of the entries are highest priority first, to lowest
+priority last, based upon the order they appear in the P4 program.
+
+
+### Ternary tables
+
 If a table has no `range` field, but at least one `ternary` field, it is
 implemented internally as a `ternary` table in BMv2. As for `range` tables, a
 single search key can be matched by multiple table entries, and thus every entry
 must have a numeric priority assigned by the control plane software. The same
 note about `lpm` fields described above for `range` tables also applied to
-`ternary` tables.
+`ternary` tables, as well as the note about entries specified via `const
+entries`.
+
+
+### Longest prefix match tables
 
 If a table has neither `range` nor `ternary` fields, but at least one `lpm`
 field, there must be exactly one `lpm` field. There can be 0 or more `exact`
@@ -447,12 +423,242 @@ matching entry with the longest prefix length is always the winner. The control
 plane cannot specify a priority when installing entries for such a table -- it
 is always determined by the prefix length.
 
+If a longest prefix match table has entries defined via a `const entries` table
+property, then the relative priority of the entries are determined by the prefix
+lengths, not by the order they appear in the P4 program.
+
+
+### Exact match tables
+
 If a table has only `exact` fields, it is implemented internally as an `exact`
 table in BMv2. For any search key, there can be at most one matching table
 entry, because duplicate search keys are not allowed to be installed. Thus no
 numeric priority is ever needed to determine the "winning" matching table entry.
 BMv2 (and many other P4 implementations) implements the match portion of such a
 table's functionality using a hash table.
+
+If an exact match table has entries defined via a `const entries` table
+property, there can be at most one matching entry for any search key, so the
+relative order that entries appear in the P4 program is unimportant in
+determining which entry will win.
+
+
+## Specifying match criteria for table entries using `const entries`
+
+The table below shows, for each `match_kind` value of P4_16 table key fields,
+which syntax is allowed for specifying the set of matching field values for a
+table entry in a `const entries` list.
+
+A restriction on all allowed cases is that `lo`, `hi`, `val`, and `mask` must be
+a legal possible value for the field, i.e. not outside of that field's range of
+values. All of them can be arithmetic expressions containing compile time
+constant values.
+
+|                  | `range`      | `ternary`    | `lpm`        | `exact` |
+| ---------------- | ------------ | ------------ | ------------ | ------- |
+| `lo .. hi`       | yes (Note 1) | no           | no           | no      |
+| `val &&& mask`   | no           | yes (Note 2) | yes (Note 3) | no      |
+| `val`            | yes (Note 4) | yes (Note 5) | yes (Note 5) | yes     |
+| `_` or `default` | yes (Note 6) | yes (Note 6) | yes (Note 6) | no      |
+
+Note 1: Restriction: `lo <= hi`. A run time search key value `k` matches if `lo
+<= k <= hi`.
+
+Note 2: Restriction: `val == (val & mask)`. Bit positions of `mask` equal to 1
+are exact match bit positions, and bit positions where `mask` is 0 are "wild
+card" or don't care bit position. A run time search key value `k` matches if `(k
+& mask) == (val & mask)`.
+
+Note 3: Restriction: `val == (val & mask)` and `mask` is a "prefix mask",
+i.e. it has all 1 bit positions consecutive and in the most significant bit
+positions of the field. WARNING: If you attempt to specify a prefix as `val /
+prefix_length` in a P4_16 program (the syntax used by some command line
+interfaces for specifying a prefix, such as `simple_switch_CLI`), that is
+actually an arithmetic expression that divides `val` by `prefix_length`, and
+thus falls into the `val` case, which is exact match. There is no warning from
+the compiler because it is perfectly legal syntax for a division operation.
+
+Note 4: Equivalent to the range `val .. val`, so it behaves as exact match on
+`val`.
+
+Note 5: Equivalent to `val &&& mask` where `mask` is 1 in all bit positions of
+the field, so it behaves as exact match on `val`.
+
+Note 6: Matches any allowed value for the field. Equivalent to
+`min_posible_field_value .. max_possible_field_value` for `range` fields, or `0
+&&& 0` for `ternary` and `lpm` fields.
+
+Below is a portion of a P4_16 program that demonstrates most of the allowed
+combinations of `match_kind` and syntax for specifying matching sets of values.
+
+```
+header h1_t {
+    bit<8> f1;
+}
+
+struct headers_t {
+    h1_t h1;
+}
+
+// ... later ...
+
+control ingress(inout headers_t hdr,
+                inout metadata_t m,
+                inout standard_metadata_t stdmeta)
+{
+    action a(bit<9> x) { stdmeta.egress_spec = x; }
+    table t1 {
+        key = { hdr.h1.f1 : range; }
+        actions = { a; }
+        const entries = {
+             1 ..  8 : a(1);
+             6 .. 12 : a(2);  // ranges are allowed to overlap between entries
+            15 .. 15 : a(3);
+            17       : a(4);  // equivalent to 17 .. 17
+            // It is not required to have a "match anything" rule in a table,
+            // but it is allowed (except for exact match fields), and several of
+            // these examples have one.
+            _        : a(5);
+        }
+    }
+    table t2 {
+        key = { hdr.h1.f1 : ternary; }
+        actions = { a; }
+        // There is no requirement to specify ternary match criteria using
+        // hexadecimal values.  I personally prefer it to make the mask bit
+        // positions more obvious.
+        const entries = {
+            0x04 &&& 0xfc : a(1);
+            0x40 &&& 0x72 : a(2);
+            0x50 &&& 0xff : a(3);
+            0xfe          : a(4);  // equivalent to 0xfe &&& 0xff
+            _             : a(5);
+        }
+    }
+    table t3 {
+        key = { hdr.h1.f1 : lpm; }
+        actions = { a; }
+        const entries = {
+            0x04 &&& 0xfc : a(1);
+            0x40 &&& 0xf8 : a(2);
+            0x04 &&& 0xff : a(3);
+            0xf9          : a(4);  // equivalent to 0xf9 &&& 0xff
+            _             : a(5);
+        }
+    }
+    table t4 {
+        key = { hdr.h1.f1 : exact; }
+        actions = { a; }
+        const entries = {
+            0x04 : a(1);
+            0x40 : a(2);
+            0x05 : a(3);
+            0xf9 : a(4);
+        }
+    }
+    // ... more code here ...
+}
+```
+
+
+## Restrictions on recirculate, resubmit, and clone operations
+
+Recirculate, resubmit, and clone operations _that do not preserve
+metadata_, i.e. they have an empty list of fields whose value should
+be preserved, work as expected when using p4c and simple_switch, with
+either P4_14 as the source language, or P4_16 plus the v1model
+architecture.
+
+Unfortunately, at least some of these operations that attempt to
+preserve metadata _do not work correctly_ -- they still cause the
+packet to be recirculated, resubmitted, or cloned, but they do not
+preserve the desired metadata field values.
+
+This is a known issue that has been discussed at length by the p4c
+developers and P4 language design work group, and the decision made
+is:
+
+* Long term, the P4_16 [Portable Switch
+  Architecture](https://p4.org/specs/) uses a different mechanism for
+  specifying metadata to preserve than the v1model architecture uses,
+  and should work correctly.  As of October 2019 the implementation of
+  PSA is not complete, so this does not help one write working code
+  today.
+* If someone wishes to volunteer to make changes to p4c and/or
+  simple_switch for improving this situation, please contact the P4
+  language design work group and coordinate with them.
+  * The preferred form of help would be to complete the Portable
+    Switch Architecture implementation.
+  * Another possibility would be enhancing the v1model architecture
+    implementation.  Several approaches for doing so that have been
+    discussed are described
+    [here](https://github.com/jafingerhut/p4-guide/blob/master/v1model-special-ops/README-resubmit-examples.md).
+
+Note that this issue affects not only P4_16 programs using the v1model
+architecture, but also P4_14 programs compiled using the `p4c`
+compiler, because internally `p4c` translates P4_14 to P4_16 code
+before the part of the compiler that causes the problem to occur.
+
+The fundamental issue is that P4_14 has the `field_list` construct,
+which is a restricted kind of _named reference_ to other fields.  When
+these field lists are used in P4_14 for recirculate, resubmit, and
+clone operations that preserve metadata, they direct the target not
+only to read those field values, but also later write them (for the
+packet after recirculating, resubmitting, or cloning).  P4_16 field
+lists using the syntax `{field_1, field_2, ...}` are restricted to
+accessing the current values of the fields at the time the statement
+or expression is executed, but do not represent any kind of reference,
+and by the P4_16 language specification cannot cause the values of
+those fields to change at another part of the program.
+
+
+### Hints on distinguishing when metadata is preserved correctly
+
+Below are some details for anyone trying, by hook or by crook, to make
+preservation of metadata work with the current p4c implementation,
+without the future improvements mentioned above.
+
+There is no known simple rule to determine which invocations of these
+operations will preserve metadata correctly and which will not.  If
+you want at least some indication, examine the BMv2 JSON file produced
+as output from the compiler.
+
+The Python program
+[bmv2-json-check.py](https://github.com/p4pktgen/p4pktgen/blob/master/tools/bmv2-json-check.py)
+attempts to determine whether any field list used to preserve metadata
+fields for recirculate, resubmit, or clone operations looks like it
+has the name of a compiler-generated temporary variable.  Warning: its
+methods are fairly basic, and thus there is no guarantee that if the
+script says there is no problem, metadata preservation will work
+correctly, or conversely that if the script says there are suspicious
+things found, metadata preservation will not work correctly.  It
+automates what is described below.
+
+Every recirculate, resubmit, and clone operation is represented in
+JSON data inside the BMv2 JSON file.  Search for one of these strings,
+_with_ the double quote marks around them:
+
+* `"recirculate"` - only parameter is a field_list id
+* `"resubmit"` - only parameter is a field_list id
+* `"clone_ingress_pkt_to_egress"` - second parameter is a field_list id
+* `"clone_egress_pkt_to_egress"` - second parameter is a field_list id
+
+You can find the fields in each field list in the section of the BMv2
+JSON file with the key `"field_lists"`.  Whatever the field names are
+there, simple_switch _will preserve the values of fields with those
+names_.  The primary issue is whether those fields correspond to the
+same storage locations that the compiler uses to represent the fields
+you want to preserve.
+
+In some cases they are, which is often the case if the field names in
+the BMv2 JSON file look the same as, or similar to, the field names in
+your P4 source code.
+
+In some cases they represent different storage locations,
+e.g. compiler-generated temporary variables used to hold a copy of the
+field you want to preserve.  A field name beginning with `tmp.` is a
+hint of this as of p4c 2019-Oct, but this is a p4c implementation
+detail that could change.
 
 
 ## P4_16 plus v1model architecture notes
@@ -463,6 +669,15 @@ description of the P4_16 v1model architecture, but in some cases they
 also serve to document the P4_14 behavior of `simple_switch`.  This
 section is only for things specific to P4_16 plus the v1model
 architecture.
+
+In some cases, the details documented here are for how the v1model
+architecture is implemented in BMv2 simple_switch.  Such details are
+prefaced with the "BMv2 v1model implementation".  There may be other
+implementations of the v1model architecture that make different
+implementation choices or restrictions.
+
+
+### Restrictions on type `H`
 
 There is a type called `H` that is a parameter to the package
 `V1Switch` definition in `v1model.p4`, excerpted below:
@@ -483,3 +698,291 @@ of one of the following types, and no others:
 + header
 + header_union
 + header stack
+
+
+### Restrictions on parser code
+
+The P4_16 language specification version 1.1 does not support `if`
+statements inside of parsers.  Because the `p4c` compiler in-lines
+calls to functions at the location of the call, this restriction
+extends to function bodies of functions called from a parser.  There
+are two potential workarounds:
+
++ If the conditional execution can be done just as effectively by
+  waiting to do it during ingress control processing, you can use `if`
+  statements there.
++ In some cases you can implement the desired conditional execution
+  effect using `transition select` statements to branch to different
+  parser states, each of which can have its own distinct code.
+
+In the `v1model` architecture, a packet reaching the `reject` parser
+state, e.g. because it failed a `verify` call, is _not_ automatically
+dropped.  Such a packet will begin `Ingress` processing with the value
+of the `parser_error` standard metadata field equal to the error that
+occurred.  Your P4 code can direct such packets to be dropped if you
+wish, but you may also choose to write code that will do other things
+with such packets, e.g. send a clone of them to a control CPU for
+further analysis or error logging.
+
+`p4c` plus `simple_switch` does not support transitioning to the
+`reject` state explicitly in the source code.  It can only do so via
+failing a call to `verify`.
+
+
+### Restrictions on code in the `VerifyChecksum` control
+
+The `VerifyChecksum` control is executed just after the `Parser`
+completes, and just before the `Ingress` control begins.  `p4c` plus
+`simple_switch` only support a sequence of calls to the
+`verify_checksum` or `verify_checksum_with_payload` extern functions
+inside such controls.  See the `v1model.p4` include file for their
+definition.  The first argument to these functions is a boolean, which
+can be an arbitrary boolean condition used to make the checksum
+calculation conditional on that expression being true.
+
+In the `v1model` architecture, a packet having an incorrect checksum
+is _not_ automatically dropped.  Such a packet will begin `Ingress`
+processing with the value of the `checksum_error` standard metadata
+field equal to 1.  If your program has multiple calls to
+`verify_checksum` and/or `verify_checksum_with_payload`, there is no
+way supported to determine which of the calls was the one that found
+an incorrect checksum.  Your P4 code can direct such packets to be
+dropped if you wish, but this will not automatically be done for you.
+
+
+### Restrictions on code in the `Ingress` and `Egress` controls
+
+`simple_switch` does not support doing `apply` on the same table more
+than once for a single execution of the `Ingress` control, nor for a
+single execution of the `Egress` control.
+
+In some cases, you can work around this restriction by having multiple
+tables with similar definitions, and `apply` each of them once per
+execution of the `Ingress` control (or `Egress`).  If you want two
+such tables to contain the same set of table entries and actions, then
+you must write your control plane software to keep their contents the
+same, e.g. always add an entry to `T2` every time you add an entry to
+`T1`, etc.
+
+This restriction is one that could be generalized in `simple_switch`,
+but realize that some high speed ASIC implementations of P4 may also
+impose this same restriction, because the restriction can be imposed
+by the design of the hardware.
+
+
+### Restrictions on code within actions
+
+These restrictions are actually restrictions of the `p4c` compiler, not of
+`simple_switch`.  Anyone interested in enhancing `p4c` to remove these
+restrictions should see the issues below.
+
+The P4_16 language specification v1.1.0 permits `if` statements within action
+declarations.  `p4c`, when compiling for the target BMv2 simple_switch, supports
+some kinds of `if` statements, in particular ones that can be transformed into
+assignments using the ternary `condition ? true_expr : false_expr` operator.
+This is supported:
+
+```
+    action foo() {
+        meta.b = meta.b + 5;
+        if (hdr.ethernet.etherType == 7) {
+            hdr.ethernet.dstAddr = 1;
+        } else {
+            hdr.ethernet.dstAddr = 2;
+        }
+    }
+```
+
+but this is not, as of 2019-Jul-01:
+
+```
+    action foo() {
+        meta.b = meta.b + 5;
+        if (hdr.ethernet.etherType == 7) {
+            hdr.ethernet.dstAddr = 1;
+        } else {
+	    mark_to_drop(standard_metadata);
+        }
+    }
+```
+
+Given the following text from the P4_16 language specification, it is likely
+that there are other P4 implementations that have limited or no support for `if`
+statements within actions:
+
+    No `switch` statements are allowed within an action --- the grammar permits
+    them, but a semantic check should reject them.  Some targets may impose
+    additional restrictions on action bodies --- e.g., only allowing
+    straight-line code, with no conditional statements or expressions.
+
+Thus P4 programs using `if` statements within actions are likely to be less
+portable than programs that avoid doing so.
+
+As mentioned above, enhancing `p4c` would enable a larger variety of `if`
+statements within actions to be supported.
+
+* [p4c issue #644](https://github.com/p4lang/p4c/issues/644)
+* [behavioral-model issue #379](https://github.com/p4lang/behavioral-model/pull/379)
+
+
+### Restrictions on code in the `ComputeChecksum` control
+
+The `ComputeChecksum` control is executed just after the `Egress`
+control completes, and just before the `Deparser` control begins.
+`p4c` plus `simple_switch` only support a sequence of calls to the
+`update_checksum` or `update_checksum_with_payload` extern functions
+inside such controls.  The first argument to these functions is a
+boolean, which can be an arbitrary boolean condition used to make the
+checksum update action conditional on that expression being true.
+
+
+### Restrictions on code in the `Deparser` control
+
+The `Deparser` control is restricted to contain only a sequence of
+calls to the `emit` method of the `packet_out` object.
+
+The most straightforward approach to avoiding the restrictions in the
+`ComputeChecksum` and `Deparser` controls is to write the more general
+code you want near the end of the `Egress` control.
+
+
+### BMv2 `register` implementation notes
+
+Both p4c and simple_switch support register arrays with elements that
+are arbitrary values of type `bit<W>` or `int<W>`, but not other
+types, e.g. structs would be convenient for this purpose in some
+programs, but this is not supported.
+
+As an example of a way to work around this limitation, suppose you
+wanted a struct with three fields x, y, and z with types `bit<8>`,
+`bit<3>`, and `bit<6>`.  You can emulate this by making a register
+array with elements of type `bit<17>` (the total width of all 3
+fields), and use P4_16 bit slicing operations to separate the 3 fields
+from the 17-bit value after reading from the register array, and P4_16
+bit vector concatenation operations to combine 3 fields together,
+forming a 17-bit result, before writing the 17-bit value to the
+register array.
+
+```
+    register< bit<17> >(512) my_register_array;
+    bit<9> index;
+
+    // ... other code here ...
+
+    // This example action is written assuming that some code executed
+    // earlier (not shown here) has assigned a correct desired value
+    // to the variable 'index'.
+
+    action update_fields() {
+        bit<17> tmp;
+        bit<8> x;
+        bit<3> y;
+        bit<6> z;
+
+        my_register_array.read(tmp, (bit<32>) index);
+        // Use bit slicing to extract out the logically separate parts
+        // of the 17-bit register entry value.
+	x = tmp[16:9];
+	y = tmp[8:6];
+	z = tmp[5:0];
+
+	// Whatever modifications you wish to make to x, y, and z go
+	// here.  This is just an example code snippet, not known to
+	// do anything useful for packet processing.
+	if (y == 0) {
+            x = x + 1;
+            y = 7;
+            z = z ^ hdr.ethernet.etherType[3:0];
+	} else {
+            // leave x unchanged
+            y = y - 1;
+            z = z << 1;
+	}
+
+        // Concatenate the updated values of x, y, and z back into a
+        // 17-bit value for writing back to the register.
+	tmp = x ++ y ++ z;
+        my_register_array.write((bit<32>) index, tmp);
+    }
+```
+
+While p4c and simple_switch support as wide a bit width W as you wish
+for array elements for packet processing, the Thrift API (used by
+`simple_switch_CLI`, and perhaps some switch controller software) only
+supports control plane read and write operations for array elements up
+to 64 bits wide (see the type `BmRegisterValue` in file
+[`standard.thrift`](https://github.com/p4lang/behavioral-model/blob/master/thrift_src/standard.thrift),
+which is a 64-bit integer as of October 2019).  The P4Runtime API does
+not have this limitation, but there is no P4Runtime implementation of
+register read and write operations yet for simple_switch:
+[p4lang/PI#376](https://github.com/p4lang/PI/issues/376)
+
+The BMv2 v1model implementation supports parallel execution.  It uses
+locking of all register objects accessed within an action to guarantee
+that the execution of all steps within an action are atomic, relative
+to other packets executing the same action, or any action that
+accesses some of the same register objects.  You need not use the
+`@atomic` annotation in your P4_16 program in order for this level of
+atomicity to be guaranteed for you.
+
+BMv2 v1model as of October 2019 _ignores_ `@atomic` annotations in
+your P4_16 programs.  Thus even if you use such annotations, this does
+not cause BMv2 to treat any block of code larger than one action call
+as an atomic transaction.
+
+
+### BMv2 `random` implementation notes
+
+The BMv2 v1model implementation of the `random` function supports the
+`lo` and `hi` parameters being run-time variables, i.e. they need not
+be compile time constants.
+
+Also, they need not be limited to the constraint that `(hi - lo + 1)`
+is a power of 2.
+
+Type `T` is restricted to be `bit<W>` for `W <= 64`.
+
+
+### BMv2 `hash` implementation notes
+
+The BMv2 v1model implementation of the `hash` function supports `base`
+and `max` parameters being run-time variables, i.e. the need not be
+compile time constants.
+
+Also, `max` need not be limited to the constraint that it is a power
+of 2.
+
+Call the hash value that is calculated from the data H.  The value
+written to the out parameter named `result` is: `(base + (H % max))`
+if `max >= 1`, otherwise `base`.
+
+The type `O` of the `result`, `T` of `base`, and `M` of `max` are
+restricted to be `bit<W>` for `W <= 64`.
+
+
+### BMv2 `direct_counter` implementation notes
+
+If a table `t` has a `direct_counter` object `c` associated with it by
+having a table property `counters = c` in its definition, the BMv2
+v1model implementation behaves as if every action for that table
+contains exactly one call to `c.count()`, whether it has none, one, or
+more than one.
+
+
+### BMv2 `direct_meter` implementation notes
+
+If a table `t` has a `direct_meter` object `m` associated with it by
+having a table property `meters = m` in its definition, then _at least
+one_ of that table's actions must have a call to
+`m.read(result_field);`, for some field `result_field` with type
+`bit<W>` where `W >= 2`.
+
+When this is done, the BMv2 v1model implementation behaves as if _all_
+actions for table `t` have such a call in them, even if they do not.
+
+It is not supported, and the `p4c` compiler gives an error message, if
+you have two actions for table `t` where one has the action
+`m.read(result_field1)` and another has the action
+`m.read(result_field2)`, or if both of those calls are in the same
+action.  All calls to the `read()` method for `m` must have the same
+result parameter where the result is written.

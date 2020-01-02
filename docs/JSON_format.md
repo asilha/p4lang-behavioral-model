@@ -10,7 +10,7 @@ on each attribute.
 
 ## Current bmv2 JSON format version
 
-The version described in this document is *2.18*.
+The version described in this document is *2.23*.
 
 The major version number will be increased by the compiler only when
 backward-compatibility of the JSON format is broken. After a major version
@@ -76,6 +76,8 @@ in which the parent expression is evaluated. In the case of an expression being
 evaluated inside of an action function belonging to a match-action table, the
 local integral values correspond to the runtime data available for a given table
 entry (see the [actions](#actions) section for more details on runtime data).
+- if `type` is `parameters_vector`, `value` is a JSON array containing an
+arbitrary number of "type value objects".
 
 For an expression, `left` and `right` will themselves be JSON objects, where the
 `value` attribute can be one of `field`, `hexstr`, `header`, `expression`,
@@ -274,7 +276,7 @@ parser. The attributes for these objects are:
   in the correct order. Each parser operation is represented by a JSON object,
   whose attributes are:
     - `op`: the type of operation, either `extract`, `extract_VL`, `set`,
-    `verify`, `shift` or `primitive`.
+    `verify`, `shift`, `advance` or `primitive`.
     - `parameters`: a JSON array of objects encoding the parameters to the
     parser operation. Depending on the type of operation, the constraints are
     different. A description of these constraints is included [later in this
@@ -326,7 +328,8 @@ In the `parser_ops` array, the format of the `parameters` array depends on the
   built-in rather than a property of the header. For this operation, we require
   2 parameters. The first one follows the same rules as `extract`'s first and
   only parameter. The second one must be of type `expression` (to compute the
-  length in bits of the variable-length field in the header).
+  length in bits of the variable-length field in the header). bmv2 currently
+  requires this expression to evaluate to a multiple of 8.
   - `set`: takes exactly 2 parameters; the first one needs to be of type `field`
   with the appropriate value. The second one can be of type `field`, `hexstr`,
   `lookahead` or `expression`, with the appropriate value (see
@@ -335,7 +338,12 @@ In the `parser_ops` array, the format of the `parameters` array depends on the
   boolean expression while the second should be an expression resolving to a
   valid integral value for an error constant (see [here](#errors)).
   - `shift`: we expect a single parameter, the number of bytes to shift (shifted
-  packet data will be discarded).
+  packet data will be discarded). `shift` is deprecated in favor of `advance`
+  (see below).
+  - `advance`: we expect a single parameter, the number of *bits* to shift,
+  which can be of type `hexstr`, `field` or `expression`. `advance` replaces
+  `shift`. bmv2 currently requires the number of bits to shift to be a multiple
+  of 8.
   - `primitive`: introduced for P4_16, where extern methods can be called from
   parser states. It only takes one parameter, which is itself a JSON object with
   the following attributes:
@@ -456,6 +464,65 @@ call, with the following attributes:
     of action) array. If `type` is `extern`, this is the name of the extern
     instance. See [here](#the-type-value-object) for other types.
 
+An `expression` can either correspond to an lvalue expression or an rvalue
+expression. For example, the P4 expression `hdr.h2[hdr.h1.idx].v = hdr.h1.v + 7`
+corresponds to the following JSON object (which would be an entry in the
+`primitives` JSON array for the action to which the expression belongs):
+```json
+{
+    "op" : "assign",
+    "parameters" : [
+        {
+            "type" : "expression",
+            "value": {
+                "type": "expression",
+                "value": {
+                    "op": "access_field",
+                    "left": {
+                        "type": "expression",
+                        "value": {
+                            "op": "dereference_header_stack",
+                            "left": {
+                                "type": "header_stack",
+                                "value": "h2"
+                            },
+                            "right": {
+                                "type": "field",
+                                "value": ["h1", "idx"]
+                            }
+                        }
+                    },
+                    "right": 0
+                }
+            }
+        },
+        {
+            "type" : "expression",
+            "value": {
+                "type": "expression",
+                "value": {
+                    "op": "+",
+                    "left": {
+                        "type" : "field",
+                        "value" : ["h1", "v"]
+                    },
+                    "right": {
+                        "type" : "hexstr",
+                        "value" : "0x0000004d"
+                    }
+                }
+            }
+        }
+    ]
+}
+```
+In this case, the left-hand side of the assignment (`hdr.h2[hdr.h1.idx].v`) is
+an lvalue, while the right-hand side is an rvalue (`hdr.h1.v + 77`). However,
+this information does not need to appear *explicitly* in the JSON. The bmv2
+implementation of the `assign` primitive requires the first parameter to be a
+lvalue expression, and we assume that the compiler will not generate a JSON that
+violates this requirement. An invalid JSON will lead to undefined behavior.
+
 *Important note about extern instance methods*: even though in P4 these are
 invoked using object-oriented style, bmv2 treats them as regular primitives for
 which the first parameter is the extern instance. For example, if the P4 call is
@@ -476,6 +543,25 @@ in the enclosing action.
 must both resolve to integral values, which we call respectively `cond` and
 `offset`. If `cond` is 0, the primitive behaves exactly like `_jump` and we jump
 to the primitive call at index `offset`; otherwise the primitive is a no-op.
+- `exit`: implements the P4 built-in `exit` statement. The packet will be
+"marked for exit" by setting a dedicated flag; it is currently the
+responsibility of the target to reset the flag between pipelines if so desired.
+- `assume` and `assert`: these 2 statements are used in P4 for formal program
+verification. They both take a single parameter (a boolean expression) and they
+share the same implementation in bmv2 (the switch will log an error message and
+abort), but they mean different things: *assume* statements are essentially
+inputs to the formal verification tool, while *assert* statements are conditions
+that need to be proven true (see
+[this](https://github.com/p4lang/p4c/issues/1548) Github issue for more
+details). Given their bmv2 implementation, `assert` and `assume` statements are
+also useful when tetsing / debugging P4 programs with bmv2.
+- `log_msg`: used for logging user-defined messages that will be output to the
+console when using the `--log-console` option. It takes two parameters: a format
+string (which may contain one or more curly braces '{}') and a vector of
+parameters (`parameters_vector`), which is a list of values to substitute to the
+curly braces included in the format string when outputting the log message. See
+[here](#the-type-value-object) for more information on `parameters_vector`. The
+objects in the `parameters_vector` must resolve to integral values.
 
 Support for additional primitives depends on the architecture being used.
 
@@ -698,8 +784,8 @@ this extern instance. Each array item has the following attributes:
 bmv2 target architectures usually require a set of metadata fields to be defined
 in the JSON input. For example, simple_switch requires the following fields:
 `standard_metadata.ingress_port`, `standard_metadata.packet_length`,
-`standard_metadata.instance_type`, `standard_metadata.egress_spec`,
-`standard_metadata.egress_port` and `standard_metadata.clone_spec`. These fields
+`standard_metadata.instance_type`, `standard_metadata.egress_spec`, and
+`standard_metadata.egress_port`. These fields
 happen to be the standard metadata fields described in the P4_14
 specification. In some cases you may want to use different names for these
 fields in a P4 program, which you can accomplish by using field aliases. A field

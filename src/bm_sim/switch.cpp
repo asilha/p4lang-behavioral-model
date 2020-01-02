@@ -134,6 +134,14 @@ SwitchWContexts::force_arith_header(const std::string &header_name) {
   arith_objects.add_header(header_name);
 }
 
+bool
+SwitchWContexts::set_group_selector(
+    cxt_id_t cxt_id,
+    const std::string &act_prof_name,
+    std::shared_ptr<ActionProfile::GroupSelectionIface> selector) {
+  return contexts.at(cxt_id).set_group_selector(act_prof_name, selector);
+}
+
 int
 SwitchWContexts::init_objects(std::istream *is, device_id_t dev_id,
                               std::shared_ptr<TransportIface> transport) {
@@ -258,7 +266,7 @@ SwitchWContexts::init_from_options_parser(
     set_dev_mgr_packet_in(device_id, parser.packet_in_addr, transport);
 #endif
   else
-    set_dev_mgr_bmi(device_id, transport);
+    set_dev_mgr_bmi(device_id, parser.max_port_count, transport);
 
   for (const auto &iface : parser.ifaces) {
     std::cout << "Adding interface " << iface.second
@@ -304,6 +312,8 @@ SwitchWContexts::init_from_options_parser(
   }
 
   dump_packet_data = parser.dump_packet_data;
+
+  max_port_count = parser.max_port_count;
 
   // TODO(unknown): is this the right place to do this?
   set_packet_handler(packet_handler, static_cast<void *>(this));

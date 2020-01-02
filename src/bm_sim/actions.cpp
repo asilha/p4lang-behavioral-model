@@ -1,4 +1,5 @@
-/* Copyright 2013-present Barefoot Networks, Inc.
+/* Copyright 2013-2019 Barefoot Networks, Inc.
+ * Copyright 2019 VMware, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,7 +15,7 @@
  */
 
 /*
- * Antonin Bas (antonin@barefootnetworks.com)
+ * Antonin Bas
  *
  */
 
@@ -33,14 +34,24 @@
 namespace bm {
 
 ActionEngineState::ActionEngineState(Packet *pkt,
-                                     const ActionData &action_data,
-                                     const std::vector<Data> &const_values)
+                            const ActionData &action_data,
+                            const std::vector<Data> &const_values,
+                            const std::vector<ActionParam> &parameters_vector)
     : pkt(*pkt), phv(*pkt->get_phv()),
-      action_data(action_data), const_values(const_values) { }
+      action_data(action_data), const_values(const_values),
+      parameters_vector(parameters_vector) { }
 
 // the first tmp data register is reserved for internal engine use (register
 // index evaluation)
 size_t ActionFn::nb_data_tmps = 1;
+
+ActionFn::ActionFn(const std::string &name, p4object_id_t id, size_t num_params)
+    : NamedP4Object(name, id), num_params(num_params) { }
+
+ActionFn::ActionFn(const std::string &name, p4object_id_t id, size_t num_params,
+                   std::unique_ptr<SourceInfo> source_info)
+    : NamedP4Object(name, id, std::move(source_info)),
+      num_params(num_params) { }
 
 void
 ActionFn::parameter_push_back_field(header_id_t header, int field_offset) {
@@ -130,9 +141,11 @@ ActionFn::parameter_push_back_register_gen(
 
   idx->grab_register_accesses(&register_sync);
 
-  expressions.push_back(std::move(idx));
-  param.register_gen.idx = expressions.back().get();
+  param.register_gen.idx = idx.get();
   params.push_back(param);
+
+  // does not invalidate param.register_gen.idx
+  expressions.push_back(std::move(idx));
 
   register_sync.add_register_array(register_array);
 }
@@ -172,9 +185,7 @@ ActionFn::parameter_push_back_register_array(RegisterArray *register_array) {
 }
 
 void
-ActionFn::parameter_push_back_expression(
-  std::unique_ptr<ArithExpression> expr
-) {
+ActionFn::parameter_push_back_expression(std::unique_ptr<Expression> expr) {
   size_t nb_expression_params = 1;
   for (const auto &p : params)
     if (p.tag == ActionParam::EXPRESSION) nb_expression_params += 1;
@@ -190,6 +201,37 @@ ActionFn::parameter_push_back_expression(
   param.tag = ActionParam::EXPRESSION;
   param.expression = {static_cast<unsigned int>(nb_expression_params),
                       expressions.back().get()};
+  params.push_back(param);
+}
+
+void
+ActionFn::parameter_push_back_expression(std::unique_ptr<Expression> expr,
+                                         ExprType expr_type) {
+  if (expr_type == ExprType::DATA) {
+    parameter_push_back_expression(std::move(expr));
+    return;
+  }
+
+  expressions.push_back(std::move(expr));
+  ActionParam param;
+  switch (expr_type) {
+    case ExprType::HEADER:
+      param.tag = ActionParam::EXPRESSION_HEADER;
+      break;
+    case ExprType::HEADER_STACK:
+      param.tag = ActionParam::EXPRESSION_HEADER_STACK;
+      break;
+    case ExprType::UNION:
+      param.tag = ActionParam::EXPRESSION_HEADER_UNION;
+      break;
+    case ExprType::UNION_STACK:
+      param.tag = ActionParam::EXPRESSION_HEADER_UNION_STACK;
+      break;
+    default:
+      assert(0 && "Invalid expression type");
+      return;
+  }
+  param.expression = {static_cast<unsigned int>(-1), expressions.back().get()};
   params.push_back(param);
 }
 
@@ -215,6 +257,29 @@ ActionFn::parameter_push_back_string(const std::string &str) {
   param.tag = ActionParam::STRING;
   param.str = &strings.back();
   params.push_back(param);
+}
+
+void
+ActionFn::parameter_start_vector() {
+  ActionParam param;
+  param.tag = ActionParam::PARAMS_VECTOR;
+  auto start = static_cast<unsigned int>(sub_params.size());
+  // end will be adjusted correctly when parameter_end_vector is called
+  param.params_vector = {start, start /* end */};
+  params.push_back(param);
+
+  // we swap the 2 vectors so that subsequent calls to parameter_push_back_*
+  // methods append parameters to the end of sub_params (instead of params)
+  params.swap(sub_params);
+}
+
+void
+ActionFn::parameter_end_vector() {
+  params.swap(sub_params);
+  assert(params.back().tag == ActionParam::PARAMS_VECTOR &&
+         "no vector was started");
+  auto end = static_cast<unsigned int>(sub_params.size());
+  params.back().params_vector.end = end;
 }
 
 void
@@ -283,6 +348,7 @@ void
 ActionPrimitiveCall::execute(ActionEngineState *state,
                              const ActionParam *args) const {
   // TODO(unknown): log source info?
+  primitive->set_source_info(source_info.get());
   primitive->execute(state, args);
 }
 
@@ -308,7 +374,8 @@ ActionFnEntry::push_back_action_data(const char *bytes, int nbytes) {
 
 void
 ActionFnEntry::execute(Packet *pkt) const {
-  ActionEngineState state(pkt, action_data, action_fn->const_values);
+  ActionEngineState state(pkt, action_data, action_fn->const_values,
+                          action_fn->sub_params);
 
   auto &primitives = action_fn->primitives;
   size_t param_offset = 0;
