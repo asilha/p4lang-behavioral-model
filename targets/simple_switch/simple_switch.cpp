@@ -305,7 +305,7 @@ SimpleSwitch::SimpleSwitch(bool enable_swap, port_t drop_port)
     egress_buffers(nb_egress_threads,
                    64, EgressThreadMapper(nb_egress_threads)),
 #endif
-    output_buffer(262144),
+    output_buffer(1048576),
     // cannot use std::bind because of a clang bug
     // https://stackoverflow.com/questions/32030141/is-this-incorrect-use-of-stdbind-or-a-compiler-bug
     my_transmit_fn([this](port_t port_num, packet_id_t pkt_id,
