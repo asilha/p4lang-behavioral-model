@@ -1,4 +1,4 @@
-FROM p4lang/third-party:stable
+FROM asilha/p4lang-third-party:euclid
 LABEL maintainer="Antonin Bas <antonin@barefootnetworks.com>"
 LABEL description="This Docker image does not have any dependency on PI or P4 \
 Runtime, it only builds bmv2 simple_switch."
@@ -21,6 +21,7 @@ ENV BM_DEPS automake \
             libboost-filesystem-dev \
             libboost-thread-dev \
             libtool
+
 ENV BM_RUNTIME_DEPS libboost-program-options1.58.0 \
                     libboost-system1.58.0 \
                     libboost-filesystem1.58.0 \
@@ -28,19 +29,25 @@ ENV BM_RUNTIME_DEPS libboost-program-options1.58.0 \
                     libgmp10 libjudydebian1 \
                     libpcap0.8 \
                     python
+
 COPY . /behavioral-model/
+
 WORKDIR /behavioral-model/
+
 RUN apt-get update && \
     apt-get install -y --no-install-recommends software-properties-common && \
     add-apt-repository -y ppa:ubuntu-toolchain-r/test && \
     apt-get update && \
-    apt-get install -y --no-install-recommends $BM_DEPS $BM_RUNTIME_DEPS && \
-    ./autogen.sh && \
+    apt-get install -y --no-install-recommends $BM_DEPS $BM_RUNTIME_DEPS 
+	
+RUN ./autogen.sh && \
     ./configure --enable-debugger && \
     make && \
     make install-strip && \
-    ldconfig && \
-    apt-get purge -y $BM_DEPS && \
+    ldconfig
+
+RUN	apt-get purge -y $BM_DEPS && \
     apt-get autoremove --purge -y && \
-    rm -rf /behavioral-model /var/cache/apt/* /var/lib/apt/lists/* && \
-    echo 'Build image ready'
+    rm -rf /behavioral-model /var/cache/apt/* /var/lib/apt/lists/*
+
+RUN echo 'Build image ready'
