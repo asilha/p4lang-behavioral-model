@@ -56,6 +56,8 @@
 #include <set>
 #include <string>
 #include <typeindex>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "P4Objects.h"
@@ -339,6 +341,9 @@ class Context final {
   mt_get_meter_rates(const std::string &table_name, entry_handle_t handle,
                      std::vector<Meter::rate_config_t> *configs);
 
+  MatchErrorCode
+  mt_reset_meter_rates(const std::string &table_name, entry_handle_t handle);
+
   Counter::CounterErrorCode
   read_counters(const std::string &counter_name,
                 size_t index,
@@ -367,6 +372,9 @@ class Context final {
   meter_get_rates(const std::string &meter_name, size_t idx,
                   std::vector<Meter::rate_config_t> *configs);
 
+  MeterErrorCode
+  meter_reset_rates(const std::string &meter_name, size_t idx);
+
   RegisterErrorCode
   register_read(const std::string &register_name,
                 const size_t idx, Data *value);
@@ -392,6 +400,13 @@ class Context final {
   ParseVSet::ErrorCode
   parse_vset_remove(const std::string &parse_vset_name,
                     const ByteContainer &value);
+
+  ParseVSet::ErrorCode
+  parse_vset_get(const std::string &parse_vset_name,
+                 std::vector<ByteContainer> *values);
+
+  ParseVSet::ErrorCode
+  parse_vset_clear(const std::string &parse_vset_name);
 
   P4Objects::IdLookupErrorCode p4objects_id_from_name(
       P4Objects::ResourceType type, const std::string &name,

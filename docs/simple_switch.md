@@ -134,7 +134,7 @@ metadata intrinsic_metadata_t intrinsic_metadata;
 - `ingress_global_timestamp`: a timestamp, in microseconds, set when the packet
 shows up on ingress. The clock is set to 0 every time the switch starts. This
 field can be read directly from either pipeline (ingress and egress) but should
-not be written to.
+not be written to.  See Section [BMv2 timestamp implementation notes](#BMv2-timestamp-implementation-notes) for more details.
 - `egress_global_timestamp`: a timestamp, in microseconds, set when the packet
 starts egress processing. The clock is the same as for
 `ingress_global_timestamp`. This field should only be read from the egress
@@ -166,9 +166,9 @@ recommend that you use the following P4_14 code:
 header_type queueing_metadata_t {
     fields {
         enq_timestamp : 48;
-        enq_qdepth : 16;
+        enq_qdepth : 19;
         deq_timedelta : 32;
-        deq_qdepth : 16;
+        deq_qdepth : 19;
         qid : 8;
     }
 }
@@ -178,10 +178,10 @@ Of course, all of these fields can only be accessed from the egress pipeline and
 they are read-only.
 - `enq_timestamp`: a timestamp, in microseconds, set when the packet is first
 enqueued.
-- `enq_qdepth`: the depth of the queue when the packet was first enqueued.
+- `enq_qdepth`: the depth of the queue when the packet was first enqueued, in units of number of packets (not the total size of packets).
 - `deq_timedelta`: the time, in microseconds, that the packet spent in the
 queue.
-- `deq_qdepth`: the depth of queue when the packet was dequeued.
+- `deq_qdepth`: the depth of queue when the packet was dequeued, in units of number of packets (not the total size of packets).
 - `qid`: when there are multiple queues servicing each egress port (e.g. when
 priority queueing is enabled), each queue is assigned a fixed unique id, which
 is written to this field. Otherwise, this field is set to 0.
@@ -202,7 +202,7 @@ After-ingress pseudocode - the short version:
 
 ```
 if (a clone primitive action was called) {
-    make a clone of the packet with details configured for the clone session
+    create clone(s) of the packet with details configured for the clone session
 }
 if (digest to generate) {   // because your code called generate_digest
     send a digest message to the control plane software
@@ -229,25 +229,38 @@ if (a clone primitive action was called) {
     // `clone_ingress_pkt_to_egress` primitive action in a P4_14
     // program, during ingress processing.
 
-    Make a clone of the packet destined for the egress_port configured
-    in the clone (aka mirror) session id number that was given when the
-    last clone primitive action was called.
+    Create zero or more clones of the packet.  The cloned packet(s)
+    will be enqueued in the packet buffer, destined for the egress
+    port(s) configured in the clone session whose numeric id was given
+    as the value of the `session` parameter when the last clone
+    primitive action was called.
 
-    The packet contents will be the same as when it most recently
-    began the ingress processing, where the clone operation was
-    performed, without any modifications that may have been made
-    during the execution of that ingress code.  (That may not be the
-    packet as originally received by the switch, if the packet reached
-    this occurrence of ingress processing via a recirculate operation,
-    for example.)
+    Each cloned packet will later perform egress processing,
+    independently from whatever the original packet does next, and if
+    multiple cloned packets are created via the same clone operation,
+    independently from each other.
+
+    The contents of the cloned packet(s) will be the same as the
+    packet when it most recently began ingress processing, where the
+    clone operation was performed, without any modifications that may
+    have been made during the execution of that ingress code.  (That
+    may not be the packet as originally received by the switch, if the
+    packet reached this occurrence of ingress processing via a
+    recirculate operation, for example.)
 
     If it was a clone3 (P4_16) or clone_ingress_pkt_to_egress (P4_14)
     action, also preserve the final ingress values of the metadata
     fields specified in the field list argument, except assign
     instance_type a value of PKT_INSTANCE_TYPE_INGRESS_CLONE.
 
-    The cloned packet will continue processing at the beginning of
-    your egress code.
+    Each cloned packet will be processed by your parser code again.
+    In many cases this will result in exactly the same headers being
+    parsed as when the packet was most recently parsed, but if your
+    parser code uses the value of standard_metadata.instance_type to
+    affect its behavior, it could be different.
+
+    After this parsing is done, each clone will continue processing at
+    the beginning of your egress code.
     // fall through to code below
 }
 if (digest to generate) {
@@ -291,12 +304,12 @@ After-egress pseudocode - the short version:
 
 ```
 if (a clone primitive action was called) {
-    make a clone of the packet with details configured for the clone session
+    create clone(s) of the packet with details configured for the clone session
 }
 if (egress_spec == DROP_PORT) {  // e.g. because your code called drop/mark_to_drop
     Drop packet.
 } else if (recirculate was called) {
-    start ingress processing over again for deparsed packet
+    after deparsing, deparsed packet starts over again as input to parser
 } else {
     Send the packet to the port in egress_port.
 }
@@ -313,20 +326,33 @@ if (a clone primitive action was called) {
     // `clone_egress_pkt_to_egress` primitive action in a P4_14
     // program, during egress processing.
 
-    Make a clone of the packet destined for the egress_port configured
-    in the clone (aka mirror) session id number that was given when the
-    last clone or clone3 primitive action was called.
+    Create zero or more clones of the packet.  The cloned packet(s)
+    will be enqueued in the packet buffer, destined for the egress
+    port(s) configured in the clone session whose numeric id was given
+    as the value of the `session` parameter when the last clone
+    primitive action was called.
 
-    The packet contents will be as constructed by the deparser after
-    egress processing, with any modifications made to the packet
-    during both ingress and egress processing.
+    Each cloned packet will later perform egress processing,
+    independently from whatever the original packet does next, and if
+    multiple cloned packets are created via the same clone operation,
+    independently from each other.
+
+    The contents of the cloned packet(s) will be as they are at the
+    end of egress processing, including any changes made to the values
+    of fields in headers, and whether headers were made valid or
+    invalid.  Your deparser code will _not_ be executed for
+    egress-to-egress cloned packets, nor will your parser code be
+    executed for them.
 
     If it was a clone3 (P4_16) or clone_egress_pkt_to_egress (P4_14)
     action, also preserve the final egress values of the metadata
     fields specified in the field list argument, except assign
-    instance_type a value of PKT_INSTANCE_TYPE_EGRESS_CLONE.
+    instance_type a value of PKT_INSTANCE_TYPE_EGRESS_CLONE.  Each
+    cloned packet will have the same standard_metadata fields
+    overwritten that all packets that begin egress processing do,
+    e.g. egress_port, egress_spec, egress_global_timestamp, etc.
 
-    The cloned packet will continue processing at the beginning of
+    Each cloned packet will continue processing at the beginning of
     your egress code.
     // fall through to code below
 }
@@ -338,9 +364,10 @@ if (egress_spec == DROP_PORT) {
 } else if (recirculate was called) {
     // This condition will be true if your code called the recirculate
     // primitive action during egress processing.
-    Start ingress over again, for the packet as constructed by the
-    deparser, with any modifications made to the packet during both
-    ingress and egress processing.  Preserve the final egress values
+    Start processing the packet over again.  That is, take the packet
+    as constructed by the deparser, with any modifications made to the
+    packet during both ingress and egress processing, and give that
+    packet as input to the parser.  Preserve the final egress values
     of any fields specified in the field list given as an argument to
     the last recirculate primitive action called, except assign
     instance_type a value of PKT_INSTANCE_TYPE_RECIRC.
@@ -363,6 +390,7 @@ values:
 + `exact` - from P4_16 language specification
 + `lpm` - from P4_16 language specification
 + `ternary` - from P4_16 language specification
++ `optional` - defined in `v1model.p4`
 + `range` - defined in `v1model.p4`
 + `selector` - defined in `v1model.p4`
 
@@ -377,7 +405,7 @@ restriction is in place as of the January 2019 version of `p4c`.
 ### Range tables
 
 If a table has at least one `range` field, it is implemented internally as a
-`range` table in BMv2. Because a single search key could match mutiple entries,
+`range` table in BMv2. Because a single search key could match multiple entries,
 every entry must be assigned a numeric priority by the control plane software
 when it is installed. If multiple installed table entries match the same search
 key, one among them with the maximum numeric priority will "win", and its action
@@ -393,7 +421,7 @@ determine whether a search key matches the entry, but the prefix length does
 _not_ determine the relative priority among multiple matching table
 entries. Only the numeric priority supplied by the control plane software
 determines that. Because of this, it would be reasonable for a `range` table to
-support multiple `lpm` key fields, but as of January 2019 this is not supported.
+support multiple `lpm` key fields, but as of January 2020 this is not supported.
 
 If a range table has entries defined via a `const entries` table property, then
 the relative priority of the entries are highest priority first, to lowest
@@ -402,26 +430,26 @@ priority last, based upon the order they appear in the P4 program.
 
 ### Ternary tables
 
-If a table has no `range` field, but at least one `ternary` field, it is
-implemented internally as a `ternary` table in BMv2. As for `range` tables, a
-single search key can be matched by multiple table entries, and thus every entry
-must have a numeric priority assigned by the control plane software. The same
-note about `lpm` fields described above for `range` tables also applied to
-`ternary` tables, as well as the note about entries specified via `const
-entries`.
+If a table has no `range` field, but at least one `ternary` or `optional` field,
+it is implemented internally as a `ternary` table in BMv2. As for `range`
+tables, a single search key can be matched by multiple table entries, and thus
+every entry must have a numeric priority assigned by the control plane
+software. The same note about `lpm` fields described above for `range` tables
+also applied to `ternary` tables, as well as the note about entries specified
+via `const entries`.
 
 
 ### Longest prefix match tables
 
-If a table has neither `range` nor `ternary` fields, but at least one `lpm`
-field, there must be exactly one `lpm` field. There can be 0 or more `exact`
-fields. While there can be multiple installed table entries that match a single
-search key, with these restrictions there can be at most one matching table
-entry of each possible prefix length of the `lpm` field (because no two table
-entries installed at the same time are allowed to have the same search key). The
-matching entry with the longest prefix length is always the winner. The control
-plane cannot specify a priority when installing entries for such a table -- it
-is always determined by the prefix length.
+If a table has no `range`, `ternary`, nor `optional` fields, but at least one
+`lpm` field, there must be exactly one `lpm` field. There can be 0 or more
+`exact` fields. While there can be multiple installed table entries that match a
+single search key, with these restrictions there can be at most one matching
+table entry of each possible prefix length of the `lpm` field (because no two
+table entries installed at the same time are allowed to have the same search
+key). The matching entry with the longest prefix length is always the
+winner. The control plane cannot specify a priority when installing entries for
+such a table -- it is always determined by the prefix length.
 
 If a longest prefix match table has entries defined via a `const entries` table
 property, then the relative priority of the entries are determined by the prefix
@@ -454,12 +482,12 @@ a legal possible value for the field, i.e. not outside of that field's range of
 values. All of them can be arithmetic expressions containing compile time
 constant values.
 
-|                  | `range`      | `ternary`    | `lpm`        | `exact` |
-| ---------------- | ------------ | ------------ | ------------ | ------- |
-| `lo .. hi`       | yes (Note 1) | no           | no           | no      |
-| `val &&& mask`   | no           | yes (Note 2) | yes (Note 3) | no      |
-| `val`            | yes (Note 4) | yes (Note 5) | yes (Note 5) | yes     |
-| `_` or `default` | yes (Note 6) | yes (Note 6) | yes (Note 6) | no      |
+|                  | `range`      | `ternary`    | `optional`   | `lpm`        | `exact` |
+| ---------------- | ------------ | ------------ | ------------ | ------------ | ------- |
+| `lo .. hi`       | yes (Note 1) | no           | no           | no           | no      |
+| `val &&& mask`   | no           | yes (Note 2) | no           | yes (Note 3) | no      |
+| `val`            | yes (Note 4) | yes (Note 5) | yes          | yes (Note 5) | yes     |
+| `_` or `default` | yes (Note 6) | yes (Note 6) | yes (Note 6) | yes (Note 6) | no      |
 
 Note 1: Restriction: `lo <= hi`. A run time search key value `k` matches if `lo
 <= k <= hi`.
@@ -494,6 +522,7 @@ combinations of `match_kind` and syntax for specifying matching sets of values.
 ```
 header h1_t {
     bit<8> f1;
+    bit<8> f2;
 }
 
 struct headers_t {
@@ -536,6 +565,23 @@ control ingress(inout headers_t hdr,
         }
     }
     table t3 {
+        key = {
+            hdr.h1.f1 : optional;
+            hdr.h1.f2 : optional;
+        }
+        actions = { a; }
+        const entries = {
+            // Note that when there are two or more fields in the key of a
+            // table, const entries key select expressions must be surrounded by
+            // parentheses.
+            (47, 72) : a(1);
+            ( _, 72) : a(2);
+            ( _, 75) : a(3);
+            (49,  _) : a(4);
+            _        : a(5);
+        }
+    }
+    table t4 {
         key = { hdr.h1.f1 : lpm; }
         actions = { a; }
         const entries = {
@@ -546,7 +592,7 @@ control ingress(inout headers_t hdr,
             _             : a(5);
         }
     }
-    table t4 {
+    table t5 {
         key = { hdr.h1.f1 : exact; }
         actions = { a; }
         const entries = {
@@ -801,7 +847,7 @@ but this is not, as of 2019-Jul-01:
         if (hdr.ethernet.etherType == 7) {
             hdr.ethernet.dstAddr = 1;
         } else {
-	    mark_to_drop(standard_metadata);
+            mark_to_drop(standard_metadata);
         }
     }
 ```
@@ -882,26 +928,26 @@ register array.
         my_register_array.read(tmp, (bit<32>) index);
         // Use bit slicing to extract out the logically separate parts
         // of the 17-bit register entry value.
-	x = tmp[16:9];
-	y = tmp[8:6];
-	z = tmp[5:0];
+        x = tmp[16:9];
+        y = tmp[8:6];
+        z = tmp[5:0];
 
-	// Whatever modifications you wish to make to x, y, and z go
-	// here.  This is just an example code snippet, not known to
-	// do anything useful for packet processing.
-	if (y == 0) {
+        // Whatever modifications you wish to make to x, y, and z go
+        // here.  This is just an example code snippet, not known to
+        // do anything useful for packet processing.
+        if (y == 0) {
             x = x + 1;
             y = 7;
             z = z ^ hdr.ethernet.etherType[3:0];
-	} else {
+        } else {
             // leave x unchanged
             y = y - 1;
             z = z << 1;
-	}
+        }
 
         // Concatenate the updated values of x, y, and z back into a
         // 17-bit value for writing back to the register.
-	tmp = x ++ y ++ z;
+        tmp = x ++ y ++ z;
         my_register_array.write((bit<32>) index, tmp);
     }
 ```
@@ -986,3 +1032,62 @@ you have two actions for table `t` where one has the action
 `m.read(result_field2)`, or if both of those calls are in the same
 action.  All calls to the `read()` method for `m` must have the same
 result parameter where the result is written.
+
+
+### BMv2 timestamp implementation notes
+
+All timestamps in BMv2 as of 2020-Jun-14 are in units of
+microseconds, and they all begin at 0 when the process begins,
+e.g. when `simple_switch` or `simple_switch_grpc` begins.
+
+Thus if one starts multiple `simple_switch` processes, either on the
+same system, or different systems, it is highly unlikely that their
+timestamps will be within 1 microsecond of each other.  Timestamp
+values from switch #1 could easily be X microseconds later than, or
+earlier than, switch #2, and this time difference between pairs of
+switches could change from one time of starting a multi-switch system,
+versus another time.  While it is possible to start pairs of
+`simple_switch` processes where X would be in the range -10 to +10
+microseconds, that would almost certainly be a lucky and unlikely
+chance that leads to such close timestamps.  Differences within plus
+or minus 2,000,000 microseconds should be fairly straightforward to
+achieve, if you go to at least a little bit of effort to start the
+processes at the same second as each other.
+
+Many commercial switch and NIC vendors implement standards like PTP
+([Precision Time
+Protocol](https://en.wikipedia.org/wiki/Precision_Time_Protocol)), but
+`simple_switch` does not.
+
+If one wants to use `simple_switch` and have some form of more closely
+synchronized timestamps between different switches, you have several
+options:
+
++ Modify `simple_switch` code so that the `ingress_global_timestamp`
+  and other timestamp values are calculated from the local system
+  time, e.g. perhaps using a system call like `gettimeofday`.  Many
+  systems today use NTP ([Network Time
+  Protocol](https://en.wikipedia.org/wiki/Network_Time_Protocol)) to
+  synchronize their time to some time server, and according to the
+  Wikipedia article it can achieve better than one millisecond
+  accuracy on local area networks under ideal conditions, and to
+  within tens of milliseconds over the public Internet.  If your use
+  case can accomodate this much difference in the timestamps on
+  different switches, this method should require fairly low
+  development effort to implement.
++ Implement PTP in some combination of P4 program and control plane
+  software, and run that on simple_switch.  This is likely to be a
+  significant amount of time and effort to achieve, and given the
+  variable latencies in software processing of packets in virtual
+  and/or physical Ethernet interfaces on typical hosts, it seems
+  unlikely that synchronization closer than tens or hundreds of
+  microseconds would be achievable.  Commercial PTP implementations
+  can achieve more tight synchronization because the PTP packet
+  handling is implemented within the Ethernet packet processing
+  hardware, very close to the physical transmission and reception of
+  the data between switches.
++ Implement a newer synchronization algorithm like
+  [HUYGENS](https://www.usenix.org/system/files/conference/nsdi18/nsdi18-geng.pdf).
+  This is likely to be at least as much development effort as
+  implementing PTP, but seems likely to be able to achieve tighter
+  time synchronization.

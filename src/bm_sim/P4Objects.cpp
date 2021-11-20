@@ -196,8 +196,15 @@ P4Objects::build_expression(const Json::Value &json_expression,
       expr->push_back_op(opcode);
       *expr_type = ExprType::BOOL;
     } else if (op == "access_field") {
-      build_expression(json_left, expr);
+      build_expression(json_left, expr, &typeL);
+      assert(typeL == ExprType::HEADER);
       expr->push_back_access_field(json_right.asInt());
+      *expr_type = ExprType::DATA;
+    } else if (op == "access_union_header") {
+      build_expression(json_left, expr, &typeL);
+      assert(typeL == ExprType::UNION);
+      expr->push_back_access_field(json_right.asInt());
+      *expr_type = ExprType::HEADER;
     } else {
       // special handling for unary + and -, we set the left operand to 0
       if ((op == "+" || op == "-") && json_left.isNull())
@@ -332,6 +339,18 @@ P4Objects::process_single_param(ActionFn* action_fn,
       process_single_param(action_fn, cfg_parameter_value, primitive_name);
     }
     action_fn->parameter_end_vector();
+  } else if (type == "field_list") {
+    action_fn->parameter_start_field_list();
+    for (const auto &cfg_parameter_value : cfg_parameter["value"]) {
+      const auto type = cfg_parameter_value["type"].asString();
+      if (type != "field") {
+        throw json_exception(
+        EFormat() << "Invalid type '" << type << "', expected 'field'",
+        cfg_parameter_value);
+      }
+      process_single_param(action_fn, cfg_parameter_value, primitive_name);
+    }
+    action_fn->parameter_end_field_list();
   } else if (type == "runtime_data") {
     auto action_data_offset = cfg_parameter["value"].asUInt();
     auto runtime_data_size = action_fn->get_num_params();
@@ -391,7 +410,7 @@ P4Objects::process_single_param(ActionFn* action_fn,
     build_expression(cfg_parameter["value"], expr, &expr_type);
     expr->build();
     action_fn->parameter_push_back_expression(
-        std::unique_ptr<Expression>(expr));
+        std::unique_ptr<Expression>(expr), expr_type);
   } else if (type == "register") {
     // TODO(antonin): cheap optimization
     // this may not be worth doing, and probably does not belong here
@@ -1238,9 +1257,18 @@ P4Objects::init_parsers(const Json::Value &cfg_root, InitState *init_state) {
           if (cfg_mask.isNull()) {
             parse_state->add_switch_case_vset(vset, next_state);
           } else {
-            const string mask_hexstr = cfg_mask.asString();
+            ByteContainer mask(cfg_mask.asString());
+            auto expected_width = (vset->get_compressed_bitwidth() + 7) / 8;
+            if (mask.size() != expected_width) {
+              throw json_exception(
+                  EFormat() << "Parser transition mask for value set has "
+                            << "incorrect width, expected width is "
+                            << expected_width << " bytes "
+                            << "but actual width is " << mask.size()
+                            << " bytes", cfg_transition);
+            }
             parse_state->add_switch_case_vset_with_mask(
-                vset, ByteContainer(mask_hexstr), next_state);
+                vset, ByteContainer(mask), next_state);
           }
         }
       }

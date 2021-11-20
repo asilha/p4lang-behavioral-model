@@ -23,11 +23,12 @@
 #ifndef BM_BM_SIM_PARSER_H_
 #define BM_BM_SIM_PARSER_H_
 
-#include <utility>
-#include <string>
-#include <vector>
+#include <memory>
 #include <mutex>
+#include <string>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
 #include <cassert>
 
@@ -159,6 +160,8 @@ class ParseVSetIface {
   virtual size_t size() const = 0;
 };
 
+class ParseVSetBase;  // forward declaration
+
 // Note that as of today, all parse states using a vset have to be configured
 // before any value can be added to a vset (otherwise the value won't be present
 // in the shadow copies). This can be easily changed if the need arises in the
@@ -173,6 +176,8 @@ class ParseVSet : public NamedP4Object, public ParseVSetIface {
   ParseVSet(const std::string &name, p4object_id_t id,
             size_t compressed_bitwidth);
 
+  ~ParseVSet();
+
   void add(const ByteContainer &v) override;
 
   void remove(const ByteContainer &v) override;
@@ -185,6 +190,8 @@ class ParseVSet : public NamedP4Object, public ParseVSetIface {
 
   size_t get_compressed_bitwidth() const;
 
+  std::vector<ByteContainer> get() const;
+
  private:
   void add_shadow(ParseVSetIface *shadow);
 
@@ -194,7 +201,7 @@ class ParseVSet : public NamedP4Object, public ParseVSetIface {
   // (each shadow has its own).
   mutable std::mutex shadows_mutex{};
   std::vector<ParseVSetIface *> shadows{};
-  std::unique_ptr<ParseVSetIface> base{nullptr};
+  std::unique_ptr<ParseVSetBase> base;
 };
 
 class ParseSwitchCaseIface {
@@ -335,10 +342,10 @@ class Parser : public NamedP4Object {
   //! Deleted copy assignment operator
   Parser &operator=(const Parser &other) = delete;
 
-  //! Default move constructor
-  Parser(Parser &&other) /*noexcept*/ = default;
-  //! Default move assignment operator
-  Parser &operator=(Parser &&other) /*noexcept*/ = default;
+  //! Deleted move constructor (const member variables)
+  Parser(Parser &&other) = delete;
+  //! Deleted move assignment operator (const member variables)
+  Parser &operator=(Parser &&other) /*noexcept*/ = delete;
 
  private:
   void verify_checksums(Packet *pkt) const;

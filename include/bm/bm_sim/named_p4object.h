@@ -24,8 +24,9 @@
 #define BM_BM_SIM_NAMED_P4OBJECT_H_
 
 #include <bm/bm_sim/source_info.h>
-#include <string>
 #include <memory>
+#include <string>
+#include <utility>
 
 namespace bm {
 
@@ -64,7 +65,7 @@ class NamedP4Object {
   const SourceInfo *get_source_info() const { return source_info.get(); }
 
  protected:
-  const std::string name;
+  std::string name;
   p4object_id_t id;
   std::unique_ptr<SourceInfo> source_info;
 };

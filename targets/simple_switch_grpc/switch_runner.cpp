@@ -25,7 +25,6 @@
 
 #include <bm/PI/pi.h>
 
-#include <PI/frontends/proto/device_mgr.h>
 #include <PI/frontends/proto/logging.h>
 
 #include <PI/proto/pi_server.h>
@@ -35,7 +34,7 @@
 #include <PI/target/pi_imp.h>
 #include <PI/target/pi_learn_imp.h>
 
-#include <grpc++/grpc++.h>
+#include <grpcpp/grpcpp.h>
 
 #include <p4/bm/dataplane_interface.grpc.pb.h>
 
@@ -44,6 +43,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <utility>
 
 #include "simple_switch.h"
 
@@ -63,8 +63,6 @@ namespace sswitch_runtime {
 #endif  // WITH_THRIFT
 
 namespace sswitch_grpc {
-
-using pi::fe::proto::DeviceMgr;
 
 using grpc::ServerContext;
 using grpc::Status;
@@ -506,7 +504,7 @@ SimpleSwitchGrpcRunner::SimpleSwitchGrpcRunner(
       dp_grpc_server_addr(dp_grpc_server_addr),
       dp_service(nullptr),
       dp_grpc_server(nullptr) {
-  DeviceMgr::init();
+  PIGrpcServerInit();
 }
 
 int
@@ -680,7 +678,6 @@ SimpleSwitchGrpcRunner::is_dp_service_active() {
 
 SimpleSwitchGrpcRunner::~SimpleSwitchGrpcRunner() {
   PIGrpcServerCleanup();
-  DeviceMgr::destroy();
 }
 
 void

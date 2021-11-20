@@ -47,12 +47,12 @@ to be separated from standard bmv2 options using `--`.
 
 Most users will invoke simple_switch_grpc as follows:
 ```
-simple_switch_grpc --skip-p4 \
+simple_switch_grpc --no-p4 \
     -i <PORT1>@<IFACE1> -i <PORT2>@<IFACE2> <more ports> \
     -- --grpc-server-addr <IP>:<TCP PORT> --cpu-port <CPU_PORT>
 ```
 
-* `--skip-p4` is a standard bmv2 command-line option. It means that no JSON file
+* `--no-p4` is a standard bmv2 command-line option. It means that no JSON file
   is provided when starting simple_switch_grpc and bmv2 will not initially be
   able to process packets (i.e. all packets will be dropped). You will need to
   provide a P4 "pipeline" (including a JSON file and a P4Info message) with the
@@ -60,7 +60,7 @@ simple_switch_grpc --skip-p4 \
   use simple_switch_grpc.**
 * `--grpc-server-addr` is used to provide a socket address on which the
   P4Runtime server will be run (e.g. localhost:1234, 192.168.1.1:31416,
-  [::1]:27182, ...). It will default to 0.0.0.0:50051.
+  [::1]:27182, ...). It will default to 0.0.0.0:9559.
 * `--cpu-port` is used to provide a CPU port number and enable P4Runtime
   packet-in / packet-out support. **We recommend that you use this option** as
   otherwise you will not be able to receive / send packets using the P4Runtime
