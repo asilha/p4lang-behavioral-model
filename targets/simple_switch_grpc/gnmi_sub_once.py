@@ -1,5 +1,4 @@
-#!/usr/bin/env python2
-
+#!/usr/bin/env python3
 # Copyright 2013-present Barefoot Networks, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,7 +24,7 @@ import struct
 
 parser = argparse.ArgumentParser(description='Mininet demo')
 parser.add_argument('--grpc-addr', help='P4Runtime gRPC server address',
-                    type=str, action="store", default='localhost:50051')
+                    type=str, action="store", default='localhost:9559')
 
 args = parser.parse_args()
 
@@ -43,18 +42,18 @@ def main():
             for name in ["interfaces", "interface", "..."]:
                 e = path.elem.add()
                 e.name = name
-            print "***************************"
-            print "REQUEST"
-            print req
-            print "***************************"
+            print("***************************")
+            print("REQUEST")
+            print(req)
+            print("***************************")
             yield req
             return
 
     for response in stub.Subscribe(req_iterator()):
-        print "***************************"
-        print "RESPONSE"
-        print response
-        print "***************************"
+        print("***************************")
+        print("RESPONSE")
+        print(response)
+        print("***************************")
 
 if __name__ == '__main__':
     main()

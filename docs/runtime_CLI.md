@@ -1,3 +1,7 @@
+Most of the commands in here are common to runtime_CLI and
+simple_switch_CLI, but a few exist only in simple_switch_CLI.  Those
+are marked [simple_switch_CLI only].
+
 ```
 TODO: act_prof_add_member_to_group
 TODO: act_prof_create_group
@@ -11,6 +15,9 @@ TODO: act_prof_modify_member
 TODO: act_prof_remove_member_from_group
 TODO: counter_read
 TODO: counter_reset
+TODO: counter_write
+TODO: get_time_elapsed [simple_switch_CLI only]
+TODO: get_time_since_epoch [simple_switch_CLI only]
 TODO: help
 TODO: load_new_config_file
 ```
@@ -22,7 +29,7 @@ ingress P4 code can assign values to a few fields in standard_metadata
 that control whether the packet is dropped, sent via unicast to one
 output port, or multicast replicated to a list of 0 or more output
 ports.  See
-[here](https://github.com/p4lang/behavioral-model/blob/master/docs/simple_switch.md#pseudocode-for-what-happens-at-the-end-of-ingress-and-egress-processing)
+[here](simple_switch.md#pseudocode-for-what-happens-at-the-end-of-ingress-and-egress-processing)
 for more details on how `simple_switch` decides between these
 alternatives.
 
@@ -164,7 +171,7 @@ LAGS
 Here we see that group 1113 has one node associated with it.  `L1h` is
 an abbreviation for `L1 handle`, which you may see in the
 simple_switch log messages, and means the same thing as a node handle.
-We see the rid value of 5, where rid is an abbrevation of
+We see the rid value of 5, where rid is an abbreviation of
 `egress_rid`, and we see the list of ports 0 and 3.
 
 In the current configuration of simple_switch, sending a packet to be
@@ -317,9 +324,144 @@ the meter type is packets, the rate is entered in packets/microsecond and
 burst_size is the number of packets.
 
 
+### mirroring_add, mirroring_add_mc, mirroring_delete, mirroring_get
+
+[simple_switch_CLI only]
+
+When any of these events happened during packet processing:
+
++ Your P4_16 v1model architecture program called `clone` or `clone3`
+  extern functions during ingress or egress processing, and now
+  ingress or egress processing has completed
++ Your P4_14 program called `clone_ingress_pkt_to_egress` during
+  ingress processing, which is now complete
++ Your P4_14 program called `clone_egress_pkt_to_egress` during egress
+  processing, which is now complete
+
+then not only will the current "original" packet continue with
+whatever it normally does, as if your program had not called a clone
+operation, but the PRE (Packet Replication Engine) part of
+`simple_switch` will also create zero or more copies, or clones, of
+the current packet, and cause them to be enqueued in the packet buffer
+such that later each of the cloned packet(s) will perform egress
+processing.  Each of the clones is processed independently from each
+other, and independently from the original packet.
+
+Search for occurrences of the word "clone" in [this
+article](simple_switch.md#pseudocode-for-what-happens-at-the-end-of-ingress-and-egress-processing)
+for more details on how `simple_switch` deals with cloned packets.
+
+`simple_switch` supports 32,768 independent clone sessions, numbered
+from 0 up to 32,767, also called mirroring sessions.  When a packet is
+cloned, you specify which clone session you want it to use in the P4
+program call of the clone operation.
+
+The purpose of the `mirroring` commands is to configure which port or
+ports the cloned packets are sent to.  This state is configured
+independently for each clone session numeric id.
+
+By default, when `simple_switch` starts, every clone session id is in
+an unconfigured state.  Any clone operation done for a clone session
+id that is in this unconfigured state will create 0 clone packets,
+i.e. the packet processing behavior will be the same as if you did not
+call a clone operation at all.
+
+If you use the command `mirroring_add 5 7`, the configuration of clone
+session id number 5 is changed such that future clone operations that
+use clone session 5 will create a single clone packet destined for
+egress port 7.
+
+```
+RuntimeCmd: help mirroring_add
+Add mirroring session to unicast port: mirroring_add <mirror_id> <egress_port>
+
+RuntimeCmd: mirroring_add 5 7
+
+RuntimeCmd: mirroring_get 5
+MirroringSessionConfig(mgid=None, port=7)
+```
+
+Using the command `mirroring_add_mc 5 22` modifies the configuration
+of clone session id number 5 such that future clone operations that
+use clone session 5 will create as many clones as the multicast group
+id 22 is configured to create.  See the `mc_mgrp_create` and related
+multicast group configuration commands for how to configure a
+multicast group.
+
+```
+RuntimeCmd: help mirroring_add_mc
+Add mirroring session to multicast group: mirroring_add_mc <mirror_id> <mgrp>
+
+RuntimeCmd: mirroring_add_mc 5 22
+
+RuntimeCmd: mirroring_get 5
+MirroringSessionConfig(mgid=22, port=None)
+```
+
+The command `mirroring_delete 5` returns the clone session id number 5
+to its original unconfigured state.
+
+```
+RuntimeCmd: help mirroring_delete
+Delete mirroring session: mirroring_delete <mirror_id>
+
+RuntimeCmd: mirroring_delete 5
+
+RuntimeCmd: mirroring_get 5
+Invalid mirroring operation (SESSION_NOT_FOUND)
+```
+
+The `mirroring_get` command can be used to show the current
+configuration of a clone session.
+
+
 ```
 TODO: port_add
 TODO: port_remove
+```
+
+### pvs_add, pvs_clear, pvs_get, pvs_remove
+
+These commands are used to control an instance of a P4 parser value
+set. `pvs_add` is used to add an entry to a value set, `pvs_remove` is used to
+remove an entry, `pvs_clear` is used to remove *all* entries, and `pvs_get` is
+used to list all entries.
+
+P4 allows a value_set to take a struct as the type parameter, such as in the
+following example:
+```
+struct vsk_t {
+    bit<16> f1;
+    bit<7> f2;
+}
+value_set<vsk_t>(4) pvs;
+select (<X>) {
+    pvs: accept;
+    _: reject;
+}
+```
+When adding or removing an entry, you must provide a single integer value, which
+must fit within the value set's "compressed bitwidth", or the CLI will display
+an error. When a value set's entries consist of multiple individual fields, as
+is the case in the example above, the "compressed bitwidth" is defined as the
+sum of the bitwidths of all these individual fields, without padding. When the
+type parameter for the value set is an integer (signed or unsigned), or a struct
+with a single field, the "compressed bitwidth" is simply the bitwidth of the
+integer / field.
+
+In the future, the CLI may provide a more intuitive interface and enable you to
+provide individual integer values for the different fields which constitute the
+value set entry. However, at the moment, you need to concatenate them yourself.
+
+Note that `pvs_add` will not warn you if the value you are adding already
+exists, and neither will `pvs_remove` if the value you want to remove does not
+exist in the value set.
+
+The bmv2 value set implementation does *not* support match types other than
+exact.
+
+
+```
 TODO: register_read
 TODO: register_reset
 TODO: register_write
@@ -327,6 +469,8 @@ TODO: reset_state
 TODO: serialize_state
 TODO: set_crc16_parameters
 TODO: set_crc32_parameters
+TODO: set_queue_depth [simple_switch_CLI only]
+TODO: set_queue_rate [simple_switch_CLI only]
 TODO: shell
 ```
 
@@ -343,14 +487,23 @@ No parameters.  Shows the port numbers, the interface names they are associated
 with, and their status (e.g. up or down).
 
 
+### show_pvs
+
+No parameters.  For every parser value set in the currently loaded P4 program,
+shows the name and the expected bitwidth of entries.  When adding entries with
+the `pvs_add` command, the user must provide integer values no larger than this
+bitwidth.
+
+
 ### show_tables
 
 No parameters.  For every table in the currently loaded P4 program, shows the
 name, implementation (often `None`, but can be an action profile or action
 selector for tables created with those options), and a list of table search key
 fields, giving for each such field its name, match kind (e.g. `exact`, `lpm`,
-`ternary`, `range`), and width in bits.
-
+`ternary`, `range`), and width in bits.  Note that fields with match kind
+`optional` in the P4 source code are represented as `ternary` in the BMv2 JSON
+file.
 
 ```
 TODO: swap_configs
@@ -373,7 +526,9 @@ with the name of a control that the table or action is defined within.
 Match fields must appear in the same order as the table search key fields are
 specified in the P4 program, without names.  The output of `show_tables` also
 shows the names, match kinds (`ternary`, `range`, `lpm`, or `exact`), and bit
-widths for every table, after the `mk=` string.
+widths for every table, after the `mk=` string.  Fields with match kind
+`optional` are represented as `ternary` in the BMv2 JSON file, and as far as the
+simple_switch_CLI goes are in all ways identical to `ternary`.
 
 Numeric values can be specified in decimal, or hexadecimal prefixed with `0x`.
 
@@ -402,18 +557,26 @@ That is, the table entry `value&&&mask` will match the search key value `k` if
 `(k & mask) == (value & mask)`, where `&` is bit-wise logical and like in P4.
 To match any value of a ternary search key, you can specify `0&&&0`.
 
+Table search key fields with match kind `optional` in the P4 source code are
+specified the same way as those with match kind `ternary`, as described in the
+previous paragraph.  Note that there is no checking in the runtime CLI that the
+mask must be either 0 or all 1s, and thus it allows you to do arbitrary ternary
+masks, even though this should not be allowed.  It would be nice if it
+restricted the match specifications appropriately for `optional`, but this would
+require significant changes to behavioral-model code to support it.
+
 Table search key fields with match kind `range` are specified as a minimum
 numeric value, then `->`, then a maximum numeric value, with no white space
 between the numbers and the `->`.  To match any value of a range search key, you
 can specify `0->255` for an 8-bit field, or `0->0xffffffff` for a 32-bit field,
 etc.
 
-If any of the search key fields of a table have match kind `ternary` or `range`,
-then a numeric `priority` value must be specified.  For any other kind of table,
-it is an error to specify a `priority` value.  If a search key matches multiple
-table entries, then among the ones that match the search key, one with the
-smallest numeric priority value will be the winner, meaning that its action will
-be executed.
+If any of the search key fields of a table have match kind `ternary`,
+`optional`, or `range`, then a numeric `priority` value must be specified.  For
+any other kind of table, it is an error to specify a `priority` value.  If a
+search key matches multiple table entries, then among the ones that match the
+search key, one with the smallest numeric priority value will be the winner,
+meaning that its action will be executed.
 
 Action parameters must appear in the same order as they appear in the P4
 program, without names.  The output of the `show_actions` command shows the name

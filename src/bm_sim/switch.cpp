@@ -18,25 +18,26 @@
  *
  */
 
-#include <boost/filesystem.hpp>
-
-#include <bm/config.h>
-#include <bm/bm_sim/_assert.h>
 #include <bm/bm_sim/switch.h>
+
 #include <bm/bm_sim/P4Objects.h>
-#include <bm/bm_sim/options_parse.h>
-#include <bm/bm_sim/logger.h>
+#include <bm/bm_sim/_assert.h>
 #include <bm/bm_sim/debugger.h>
 #include <bm/bm_sim/event_logger.h>
+#include <bm/bm_sim/logger.h>
+#include <bm/bm_sim/options_parse.h>
 #include <bm/bm_sim/packet.h>
 #include <bm/bm_sim/periodic_task.h>
+#include <bm/config.h>
 
 #include <cassert>
 #include <fstream>
-#include <string>
-#include <vector>
 #include <iostream>
 #include <streambuf>
+#include <string>
+#include <vector>
+
+#include <boost/filesystem.hpp>
 
 #include "md5.h"
 
@@ -91,6 +92,11 @@ SwitchWContexts::start_and_return() {
 void
 SwitchWContexts::reset_target_state() {
   reset_target_state_();
+}
+
+void
+SwitchWContexts::swap_notify() {
+  swap_notify_();
 }
 
 std::string
@@ -467,6 +473,8 @@ SwitchWContexts::do_swap() {
       phv_source->set_phv_factory(cxt_id, &cxt.get_phv_factory());
     rc &= swap_done;
   }
+  // at this stage, we have no more Packet instances in bmv2
+  swap_notify();
 #ifdef BM_DEBUG_ON
   Debugger::get()->config_change();
 #endif

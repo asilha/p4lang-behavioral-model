@@ -245,6 +245,11 @@ class RuntimeInterface {
                      entry_handle_t handle,
                      std::vector<Meter::rate_config_t> *configs) = 0;
 
+  virtual MatchErrorCode
+  mt_reset_meter_rates(cxt_id_t cxt_id,
+                       const std::string &table_name,
+                       entry_handle_t handle) = 0;
+
   virtual MatchTableType
   mt_get_type(cxt_id_t cxt_id, const std::string &table_name) const = 0;
 
@@ -338,6 +343,10 @@ class RuntimeInterface {
                   const std::string &meter_name, size_t idx,
                   std::vector<Meter::rate_config_t> *configs) = 0;
 
+  virtual MeterErrorCode
+  meter_reset_rates(cxt_id_t cxt_id,
+                    const std::string &meter_name, size_t idx) = 0;
+
   virtual RegisterErrorCode
   register_read(cxt_id_t cxt_id,
                 const std::string &register_name,
@@ -367,6 +376,13 @@ class RuntimeInterface {
   virtual ParseVSet::ErrorCode
   parse_vset_remove(cxt_id_t cxt_id, const std::string &parse_vset_name,
                     const ByteContainer &value) = 0;
+
+  virtual ParseVSet::ErrorCode
+  parse_vset_get(cxt_id_t cxt_id, const std::string &parse_vset_name,
+                 std::vector<ByteContainer> *values) = 0;
+
+  virtual ParseVSet::ErrorCode
+  parse_vset_clear(cxt_id_t cxt_id, const std::string &parse_vset_name) = 0;
 
   virtual ErrorCode
   load_new_config(const std::string &new_config) = 0;

@@ -40,14 +40,14 @@ class P4Host(Host):
         return r
 
     def describe(self):
-        print "**********"
-        print self.name
-        print "default interface: %s\t%s\t%s" %(
+        print("**********")
+        print(self.name)
+        print("default interface: %s\t%s\t%s" %(
             self.defaultIntf().name,
             self.defaultIntf().IP(),
             self.defaultIntf().MAC()
-        )
-        print "**********"
+        ))
+        print("**********")
 
 class P4Switch(Switch):
     """P4 virtual switch"""
@@ -100,8 +100,11 @@ class P4Switch(Switch):
             if not os.path.exists(os.path.join("/proc", str(pid))):
                 return False
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(0.5)
-            result = sock.connect_ex(("localhost", self.thrift_port))
+            try:
+                sock.settimeout(0.5)
+                result = sock.connect_ex(("localhost", self.thrift_port))
+            finally:
+                sock.close()
             if result == 0:
                 return  True
 

@@ -37,8 +37,8 @@
 //!
 //! When subclassing on of these two classes, you need to remember to implement
 //! the two pure virtual functions:
-//! bm::SwitchWContexts::receive(int port_num, const char *buffer, int len) and
-//! bm::SwitchWContexts::start_and_return(). Your receive() implementation will
+//! bm::SwitchWContexts::receive_(int port_num, const char *buffer, int len) and
+//! bm::SwitchWContexts::start_and_return_(). Your receive() implementation will
 //! be called for you every time a new packet is received by the device. In your
 //! start_and_return() function, you are supposed to start the different
 //! processing threads of your target switch and return immediately. Note that
@@ -49,44 +49,40 @@
 //! Both switch classes support live swapping of P4-JSON configurations. To
 //! enable it you need to provide the correct flag to the constructor (see
 //! bm::SwitchWContexts::SwitchWContexts()). Swaps are ordered through the
-//! runtime interfaces. However, it is the target switch responsibility to
-//! decide when to "commit" the swap. This is because swapping configurations
-//! invalidate certain pointers that you may still be using. We plan on trying
-//! to make this more target-friendly in the future but it is not trivial. Here
-//! is an example of how the simple router target implements swapping:
-//! @code
-//! // swap is enabled, so update pointers if needed
-//! if (this->do_swap() == 0) {  // a swap took place
-//!   ingress_mau = this->get_pipeline("ingress");
-//!   egress_mau = this->get_pipeline("egress");
-//!   parser = this->get_parser("parser");
-//!   deparser = this->get_deparser("deparser");
-//! }
-//! @endcode
+//! runtime interfaces. We ensure that during the actual swap operation
+//! (bm::SwitchWContexts::do_swap() method), there is no Packet instance
+//! inflight, which we achieve using the process_packet_mutex mutex). The final
+//! step of the swap is to call bm::SwitchWContexts::swap_notify_(), which
+//! targets can override if they need to perform some operations as part of the
+//! swap. Targets are guaranteed that no Packet instances exist as that
+//! time. Note that swapping configurations may invalidate pointers that you are
+//! still using, and it is your responsibility to refresh them.
 
 #ifndef BM_BM_SIM_SWITCH_H_
 #define BM_BM_SIM_SWITCH_H_
 
-#include <boost/thread/shared_mutex.hpp>
-
-#include <memory>
-#include <string>
-#include <typeinfo>
-#include <typeindex>
-#include <set>
-#include <vector>
-#include <iosfwd>
 #include <condition_variable>
+#include <iosfwd>
+#include <memory>
+#include <set>
+#include <string>
+#include <typeindex>
+#include <typeinfo>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include <boost/thread/shared_mutex.hpp>
 
 #include "action_profile.h"
 #include "context.h"
-#include "device_id.h"
-#include "queue.h"
-#include "learning.h"
-#include "runtime_interface.h"
 #include "dev_mgr.h"
-#include "phv_source.h"
+#include "device_id.h"
+#include "learning.h"
 #include "lookup_structures.h"
+#include "phv_source.h"
+#include "queue.h"
+#include "runtime_interface.h"
 #include "target_parser.h"
 
 namespace bm {
@@ -694,6 +690,13 @@ class SwitchWContexts : public DevMgr, public RuntimeInterface {
     return contexts.at(cxt_id).mt_get_meter_rates(table_name, handle, configs);
   }
 
+  MatchErrorCode
+  mt_reset_meter_rates(
+      cxt_id_t cxt_id, const std::string &table_name,
+      entry_handle_t handle) override {
+    return contexts.at(cxt_id).mt_reset_meter_rates(table_name, handle);
+  }
+
   Counter::CounterErrorCode
   read_counters(cxt_id_t cxt_id,
                 const std::string &counter_name,
@@ -741,6 +744,12 @@ class SwitchWContexts : public DevMgr, public RuntimeInterface {
     return contexts.at(cxt_id).meter_get_rates(meter_name, idx, configs);
   }
 
+  MeterErrorCode
+  meter_reset_rates(cxt_id_t cxt_id,
+                    const std::string &meter_name, size_t idx) override {
+    return contexts.at(cxt_id).meter_reset_rates(meter_name, idx);
+  }
+
   RegisterErrorCode
   register_read(cxt_id_t cxt_id,
                 const std::string &register_name,
@@ -786,6 +795,18 @@ class SwitchWContexts : public DevMgr, public RuntimeInterface {
   parse_vset_remove(cxt_id_t cxt_id, const std::string &parse_vset_name,
                     const ByteContainer &value) override {
     return contexts.at(cxt_id).parse_vset_remove(parse_vset_name, value);
+  }
+
+  ParseVSet::ErrorCode
+  parse_vset_get(cxt_id_t cxt_id, const std::string &parse_vset_name,
+                 std::vector<ByteContainer> *values) override {
+    return contexts.at(cxt_id).parse_vset_get(parse_vset_name, values);
+  }
+
+  ParseVSet::ErrorCode
+  parse_vset_clear(cxt_id_t cxt_id,
+                   const std::string &parse_vset_name) override {
+    return contexts.at(cxt_id).parse_vset_clear(parse_vset_name);
   }
 
   RuntimeInterface::ErrorCode
@@ -868,6 +889,8 @@ class SwitchWContexts : public DevMgr, public RuntimeInterface {
 
   void reset_target_state();
 
+  void swap_notify();
+
   //! Override in your switch implementation; it will be called every time a
   //! packet is received.
   virtual int receive_(port_t port_num, const char *buffer, int len) = 0;
@@ -882,6 +905,13 @@ class SwitchWContexts : public DevMgr, public RuntimeInterface {
   //! reset_state() is invoked by the control plane. For example, the
   //! simple_switch target uses this to reset PRE state.
   virtual void reset_target_state_() { }
+
+  //! You can override this method in your target. It will be called at the end
+  //! of a config swap operation. At that time, you will be guaranteed that no
+  //! Packet instances exist, as long as your target uses the correct methods to
+  //! instantiate these objects (bm::SwitchWContexts::new_packet_ptr() and
+  //! bm::SwitchWContexts::new_packet()).
+  virtual void swap_notify_() { }
 
  private:
   size_t nb_cxts{};

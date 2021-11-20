@@ -35,6 +35,10 @@
 #include <functional>
 
 #include "externs/psa_counter.h"
+#include "externs/psa_meter.h"
+#include "externs/psa_random.h"
+#include "externs/psa_internet_checksum.h"
+#include "externs/psa_hash.h"
 
 // TODO(antonin)
 // experimental support for priority queueing
@@ -64,6 +68,13 @@ class PsaSwitch : public Switch {
   using TransmitFn = std::function<void(port_t, packet_id_t,
                                         const char *, int)>;
 
+  struct MirroringSessionConfig {
+    port_t egress_port;
+    bool egress_port_valid;
+    unsigned int mgid;
+    bool mgid_valid;
+  };
+
  private:
   using clock = std::chrono::high_resolution_clock;
 
@@ -79,15 +90,19 @@ class PsaSwitch : public Switch {
 
   void reset_target_state_() override;
 
+  bool mirroring_add_session(mirror_id_t mirror_id,
+                             const MirroringSessionConfig &config);
+  bool mirroring_delete_session(mirror_id_t mirror_id);
+  bool mirroring_get_session(mirror_id_t mirror_id,
+                             MirroringSessionConfig *config) const;
+
   int mirroring_mapping_add(mirror_id_t mirror_id, port_t egress_port) {
     mirroring_map[mirror_id] = egress_port;
     return 0;
   }
-
   int mirroring_mapping_delete(mirror_id_t mirror_id) {
     return mirroring_map.erase(mirror_id);
   }
-
   bool mirroring_mapping_get(mirror_id_t mirror_id, port_t *port) const {
     return get_mirroring_mapping(mirror_id, port);
   }
@@ -154,6 +169,48 @@ class PsaSwitch : public Switch {
     return counter->reset_counters();
   }
 
+  MeterErrorCode
+  meter_array_set_rates(
+      cxt_id_t cxt_id, const std::string &meter_name,
+      const std::vector<Meter::rate_config_t> &configs) override {
+    auto *context = get_context(cxt_id);
+    auto *ex = context->get_extern_instance(meter_name).get();
+    if (!ex) return Meter::MeterErrorCode::INVALID_METER_NAME;
+    auto *meter = static_cast<PSA_Meter*>(ex);
+    meter->set_rates(configs);
+    return Meter::MeterErrorCode::SUCCESS;
+  }
+
+  MeterErrorCode
+  meter_set_rates(cxt_id_t cxt_id,
+                  const std::string &meter_name, size_t idx,
+                  const std::vector<Meter::rate_config_t> &configs) override {
+    auto *context = get_context(cxt_id);
+    auto *ex = context->get_extern_instance(meter_name).get();
+    if (!ex) return Meter::MeterErrorCode::INVALID_METER_NAME;
+    auto *meter = static_cast<PSA_Meter*>(ex);
+    if (idx >= meter->size())
+      return Meter::MeterErrorCode::INVALID_INDEX;
+    meter->get_meter(idx).set_rates(configs);
+    return Meter::MeterErrorCode::SUCCESS;
+  }
+
+  MeterErrorCode
+  meter_get_rates(cxt_id_t cxt_id,
+                  const std::string &meter_name, size_t idx,
+                  std::vector<Meter::rate_config_t> *configs) override {
+    auto *context = get_context(cxt_id);
+    auto *ex = context->get_extern_instance(meter_name).get();
+    if (!ex) return Meter::MeterErrorCode::INVALID_METER_NAME;
+    auto *meter = static_cast<PSA_Meter*>(ex);
+    if (idx >= meter->size())
+      return Meter::MeterErrorCode::INVALID_INDEX;
+    auto conf_vec = meter->get_meter(idx).get_rates();
+    for (auto conf : conf_vec)
+        configs->push_back(conf);
+    return Meter::MeterErrorCode::SUCCESS;
+  }
+
   // TODO(derek): override RuntimeInterface methods not yet supported
   //              by psa_switch and log an error msg / return error code
 
@@ -161,6 +218,8 @@ class PsaSwitch : public Switch {
   static constexpr size_t nb_egress_threads = 4u;
   static constexpr port_t PSA_PORT_RECIRCULATE = 0xfffffffa;
   static packet_id_t packet_id;
+
+  class MirroringSessions;
 
   enum PktInstanceType {
     PACKET_PATH_NORMAL,
@@ -187,6 +246,8 @@ class PsaSwitch : public Switch {
   void ingress_thread();
   void egress_thread(size_t worker_id);
   void transmit_thread();
+
+  void multicast(Packet *packet, unsigned int mgid, PktInstanceType path, unsigned int class_of_service);
 
   bool get_mirroring_mapping(mirror_id_t mirror_id, port_t *port) const {
     const auto it = mirroring_map.find(mirror_id);
@@ -218,6 +279,7 @@ class PsaSwitch : public Switch {
   std::shared_ptr<McSimplePreLAG> pre;
   clock::time_point start;
   std::unordered_map<mirror_id_t, port_t> mirroring_map;
+  std::unique_ptr<MirroringSessions> mirroring_sessions;
   bool with_queueing_metadata{false};
 };
 

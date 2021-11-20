@@ -18,7 +18,7 @@
  *
  */
 
-#include <grpc++/grpc++.h>
+#include <grpcpp/grpcpp.h>
 
 #include <google/rpc/code.pb.h>
 #include <p4/v1/p4runtime.grpc.pb.h>
@@ -53,7 +53,7 @@ test() {
   int dev_id = 99;
 
   auto channel = grpc::CreateChannel(
-      "localhost:50051", grpc::InsecureChannelCredentials());
+      "localhost:9559", grpc::InsecureChannelCredentials());
   std::unique_ptr<p4v1::P4Runtime::Stub> pi_stub_(
       p4v1::P4Runtime::NewStub(channel));
 
@@ -126,7 +126,7 @@ test() {
   {
     auto param = action->add_params();
     param->set_param_id(p1_id);
-    param->set_value(std::string("\x00\x09", 2));
+    param->set_value(std::string("\x09", 1));  // canonical representation
   }
 
   // add entry

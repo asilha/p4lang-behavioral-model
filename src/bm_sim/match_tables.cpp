@@ -265,7 +265,7 @@ MatchTableAbstract::write_counters(entry_handle_t handle,
 MatchErrorCode
 MatchTableAbstract::set_meter_rates(
     entry_handle_t handle,
-    const std::vector<Meter::rate_config_t> &configs) const {
+    const std::vector<Meter::rate_config_t> &configs) {
   if (!with_meters) return MatchErrorCode::METERS_DISABLED;
   auto lock = lock_write();
   if (!is_valid_handle(handle)) return MatchErrorCode::INVALID_HANDLE;
@@ -284,6 +284,17 @@ MatchTableAbstract::get_meter_rates(
   const Meter &meter = match_unit_->get_meter(handle);
   *configs = meter.get_rates();
   return MatchErrorCode::SUCCESS;
+}
+
+MatchErrorCode
+MatchTableAbstract::reset_meter_rates(entry_handle_t handle) {
+  if (!with_meters) return MatchErrorCode::METERS_DISABLED;
+  auto lock = lock_write();
+  if (!is_valid_handle(handle)) return MatchErrorCode::INVALID_HANDLE;
+  Meter &meter = match_unit_->get_meter(handle);
+  Meter::MeterErrorCode rc = meter.reset_rates();
+  return (rc == Meter::MeterErrorCode::SUCCESS) ?
+      MatchErrorCode::SUCCESS : MatchErrorCode::ERROR;
 }
 
 MatchErrorCode
@@ -403,7 +414,8 @@ MatchTable::add_entry(const std::vector<MatchKeyParam> &match_key,
     BMLOG_DEBUG("Entry {} added to table '{}'", *handle, get_name());
     BMLOG_DEBUG(dump_entry_string(*handle));
   } else {
-    BMLOG_ERROR("Error when trying to add entry to table '{}'", get_name());
+    BMLOG_ERROR("Error when trying to add entry to table '{}': {}",
+                get_name(), match_error_code_to_string(rc));
   }
 
   return rc;
@@ -423,8 +435,8 @@ MatchTable::delete_entry(entry_handle_t handle) {
   if (rc == MatchErrorCode::SUCCESS) {
     BMLOG_DEBUG("Removed entry {} from table '{}'", handle, get_name());
   } else {
-    BMLOG_ERROR("Error when trying to remove entry {} from table '{}'",
-                handle, get_name());
+    BMLOG_ERROR("Error when trying to remove entry {} from table '{}': {}",
+                handle, get_name(), match_error_code_to_string(rc));
   }
 
   return rc;
@@ -453,8 +465,8 @@ MatchTable::modify_entry(entry_handle_t handle,
     BMLOG_DEBUG("Modified entry {} in table '{}'", handle, get_name());
     BMLOG_DEBUG(dump_entry_string(handle));
   } else {
-    BMLOG_ERROR("Error when trying to modify entry {} in table '{}'",
-                handle, get_name());
+    BMLOG_ERROR("Error when trying to modify entry {} in table '{}': {}",
+                handle, get_name(), match_error_code_to_string(rc));
   }
 
   return rc;
@@ -737,7 +749,8 @@ MatchTableIndirect::add_entry(const std::vector<MatchKeyParam> &match_key,
     BMLOG_DEBUG("Entry {} added to table '{}'", *handle, get_name());
     BMLOG_DEBUG(dump_entry_string(*handle));
   } else {
-    BMLOG_ERROR("Error when trying to add entry to table '{}'", get_name());
+    BMLOG_ERROR("Error when trying to add entry to table '{}': {}",
+                get_name(), match_error_code_to_string(rc));
   }
 
   return rc;
@@ -764,8 +777,8 @@ MatchTableIndirect::delete_entry(entry_handle_t handle) {
   if (rc == MatchErrorCode::SUCCESS) {
     BMLOG_DEBUG("Entry {} removed from table '{}'", handle, get_name());
   } else {
-    BMLOG_ERROR("Error when trying to remove entry {} from table '{}'",
-                handle, get_name());
+    BMLOG_ERROR("Error when trying to remove entry {} from table '{}': {}",
+                handle, get_name(), match_error_code_to_string(rc));
   }
 
   return rc;
@@ -800,8 +813,8 @@ MatchTableIndirect::modify_entry(entry_handle_t handle, mbr_hdl_t mbr) {
     BMLOG_DEBUG("Modified entry {} in table '{}'", handle, get_name());
     BMLOG_DEBUG(dump_entry_string(handle));
   } else {
-    BMLOG_ERROR("Error when trying to modify entry {} in table '{}'",
-                handle, get_name());
+    BMLOG_ERROR("Error when trying to modify entry {} in table '{}': {}",
+                handle, get_name(), match_error_code_to_string(rc));
   }
 
   return rc;
@@ -831,8 +844,9 @@ MatchTableIndirect::set_default_member(mbr_hdl_t mbr) {
   if (rc == MatchErrorCode::SUCCESS) {
     BMLOG_DEBUG("Set default member for table '{}' to {}", get_name(), mbr);
   } else {
-    BMLOG_ERROR("Error when trying to set default member for table '{}' to {}",
-                get_name(), mbr);
+    BMLOG_ERROR(
+        "Error when trying to set default member for table '{}' to {}: {}",
+        get_name(), mbr, match_error_code_to_string(rc));
   }
 
   return rc;
@@ -1016,7 +1030,8 @@ MatchTableIndirectWS::add_entry_ws(const std::vector<MatchKeyParam> &match_key,
     BMLOG_DEBUG("Entry {} added to table '{}'", *handle, get_name());
     BMLOG_DEBUG(dump_entry_string(*handle));
   } else {
-    BMLOG_ERROR("Error when trying to add entry to table '{}'", get_name());
+    BMLOG_ERROR("Error when trying to add entry to table '{}': {}",
+                get_name(), match_error_code_to_string(rc));
   }
 
   return rc;
@@ -1054,8 +1069,8 @@ MatchTableIndirectWS::modify_entry_ws(entry_handle_t handle, grp_hdl_t grp) {
     BMLOG_DEBUG("Modified entry {} in table '{}'", handle, get_name());
     BMLOG_DEBUG(dump_entry_string(handle));
   } else {
-    BMLOG_ERROR("Error when trying to modify entry {} in table '{}'",
-                handle, get_name());
+    BMLOG_ERROR("Error when trying to modify entry {} in table '{}': {}",
+                handle, get_name(), match_error_code_to_string(rc));
   }
 
   return rc;
@@ -1086,8 +1101,9 @@ MatchTableIndirectWS::set_default_group(grp_hdl_t grp) {
   if (rc == MatchErrorCode::SUCCESS) {
     BMLOG_DEBUG("Set default group for table '{}' to {}", get_name(), grp);
   } else {
-    BMLOG_ERROR("Error when trying to set default group for table '{}' to {}",
-                get_name(), grp);
+    BMLOG_ERROR(
+        "Error when trying to set default group for table '{}' to {}: {}",
+        get_name(), grp, match_error_code_to_string(rc));
   }
 
   return rc;
